@@ -27,6 +27,7 @@ builder.Services.Configure<ServiceAuthOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection(AdminOptions.SectionName));
+builder.Services.Configure<SchemaDeliveryOptions>(builder.Configuration.GetSection(SchemaDeliveryOptions.SectionName));
 
 var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
     ?? throw new InvalidOperationException("Database configuration is missing.");
@@ -62,6 +63,7 @@ builder.Services.AddScoped<IGameDataService, GameDataService>();
 builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
+builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
 
 builder.Services.AddControllers();
 

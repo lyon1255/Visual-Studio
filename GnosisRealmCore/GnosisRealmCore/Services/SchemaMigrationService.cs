@@ -1,3 +1,4 @@
+using GnosisRealmCore.Models;
 using GnosisRealmCore.Options;
 using Microsoft.Extensions.Options;
 using MySqlConnector;
@@ -9,18 +10,18 @@ namespace GnosisRealmCore.Services;
 public sealed class SchemaMigrationService : ISchemaMigrationService
 {
     private readonly IConfiguration _configuration;
-    private readonly IWebHostEnvironment _environment;
+    private readonly IAuthApiClient _authApiClient;
     private readonly SchemaMigrationOptions _options;
     private readonly ILogger<SchemaMigrationService> _logger;
 
     public SchemaMigrationService(
         IConfiguration configuration,
-        IWebHostEnvironment environment,
+        IAuthApiClient authApiClient,
         IOptions<SchemaMigrationOptions> options,
         ILogger<SchemaMigrationService> logger)
     {
         _configuration = configuration;
-        _environment = environment;
+        _authApiClient = authApiClient;
         _options = options.Value;
         _logger = logger;
     }
@@ -36,13 +37,10 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
         var connectionString = _configuration.GetSection(DatabaseOptions.SectionName)["ConnectionString"]
             ?? throw new InvalidOperationException("Missing Database:ConnectionString.");
 
-        var migrationsDirectory = Path.IsPathRooted(_options.DirectoryPath)
-            ? _options.DirectoryPath
-            : Path.Combine(_environment.ContentRootPath, _options.DirectoryPath);
-
-        if (!Directory.Exists(migrationsDirectory))
+        var manifest = await _authApiClient.GetSchemaManifestAsync(cancellationToken);
+        if (manifest is null || manifest.Migrations.Count == 0)
         {
-            _logger.LogWarning("Schema migration directory does not exist: {Directory}", migrationsDirectory);
+            _logger.LogInformation("No remote schema migrations were returned by AuthApi.");
             return;
         }
 
@@ -52,7 +50,10 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
         await EnsureMigrationTableAsync(connection, cancellationToken);
 
         var applied = new Dictionary<string, string>(StringComparer.Ordinal);
-        await using (var cmd = new MySqlCommand("SELECT migration_id, checksum_sha256 FROM schema_migrations;", connection))
+
+        await using (var cmd = new MySqlCommand(
+            "SELECT migration_id, checksum_sha256 FROM schema_migrations;",
+            connection))
         await using (var reader = await cmd.ExecuteReaderAsync(cancellationToken))
         {
             while (await reader.ReadAsync(cancellationToken))
@@ -61,42 +62,52 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
             }
         }
 
-        foreach (var file in Directory.GetFiles(migrationsDirectory, "*.mysql").OrderBy(x => x, StringComparer.Ordinal))
+        foreach (var migration in manifest.Migrations.OrderBy(x => x.Id, StringComparer.Ordinal))
         {
-            var fileName = Path.GetFileName(file);
-            var migrationId = Path.GetFileNameWithoutExtension(fileName);
-            var sql = await File.ReadAllTextAsync(file, cancellationToken);
-            var checksum = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(sql))).ToLowerInvariant();
-
-            if (applied.TryGetValue(migrationId, out var existingChecksum))
+            if (applied.TryGetValue(migration.Id, out var existingChecksum))
             {
-                if (!string.Equals(existingChecksum, checksum, StringComparison.Ordinal))
+                if (!string.Equals(existingChecksum, migration.ChecksumSha256, StringComparison.Ordinal))
                 {
-                    throw new InvalidOperationException($"Migration checksum mismatch for {migrationId}. Existing migration files must be immutable.");
+                    throw new InvalidOperationException(
+                        $"Migration checksum mismatch for {migration.Id}. Existing migration files must be immutable.");
                 }
 
                 continue;
             }
 
-            var isDestructive = migrationId.Contains(".destructive.", StringComparison.OrdinalIgnoreCase)
-                || migrationId.Contains("_destructive_", StringComparison.OrdinalIgnoreCase);
-
-            if (isDestructive && !_options.AllowDestructiveMigrations)
+            if (migration.IsDestructive && !_options.AllowDestructiveMigrations)
             {
-                throw new InvalidOperationException($"Destructive migration blocked by configuration: {migrationId}");
+                throw new InvalidOperationException(
+                    $"Destructive migration blocked by configuration: {migration.Id}");
             }
 
-            _logger.LogInformation("Applying schema migration {MigrationId}...", migrationId);
-            await ExecuteSqlBatchAsync(connection, sql, cancellationToken);
+            var content = await _authApiClient.GetSchemaMigrationAsync(migration.Id, cancellationToken);
+            if (content is null)
+            {
+                throw new InvalidOperationException($"Migration content was not returned for {migration.Id}.");
+            }
 
-            await using var insert = new MySqlCommand(
-                @"INSERT INTO schema_migrations (migration_id, checksum_sha256, applied_at_utc, is_destructive)
-                  VALUES (@id, @checksum, @appliedAt, @isDestructive);", connection);
+            if (!string.Equals(content.ChecksumSha256, migration.ChecksumSha256, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    $"Remote migration checksum mismatch for {migration.Id}.");
+            }
 
-            insert.Parameters.AddWithValue("@id", migrationId);
-            insert.Parameters.AddWithValue("@checksum", checksum);
+            _logger.LogInformation("Applying remote schema migration {MigrationId}...", migration.Id);
+
+            await ExecuteSqlBatchAsync(connection, content.Sql, cancellationToken);
+
+            await using var insert = new MySqlCommand("""
+                INSERT INTO schema_migrations
+                (migration_id, checksum_sha256, applied_at_utc, is_destructive)
+                VALUES (@id, @checksum, @appliedAt, @isDestructive);
+                """, connection);
+
+            insert.Parameters.AddWithValue("@id", migration.Id);
+            insert.Parameters.AddWithValue("@checksum", migration.ChecksumSha256);
             insert.Parameters.AddWithValue("@appliedAt", DateTime.UtcNow);
-            insert.Parameters.AddWithValue("@isDestructive", isDestructive);
+            insert.Parameters.AddWithValue("@isDestructive", migration.IsDestructive);
+
             await insert.ExecuteNonQueryAsync(cancellationToken);
         }
     }
@@ -116,7 +127,10 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
         await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
-    private static async Task ExecuteSqlBatchAsync(MySqlConnection connection, string sql, CancellationToken cancellationToken)
+    private static async Task ExecuteSqlBatchAsync(
+        MySqlConnection connection,
+        string sql,
+        CancellationToken cancellationToken)
     {
         var batches = sql.Split(";\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 

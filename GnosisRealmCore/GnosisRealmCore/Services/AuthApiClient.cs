@@ -31,6 +31,16 @@ public sealed class AuthApiClient : IAuthApiClient
         _ = await SendAuthorizedAsync<object>(HttpMethod.Post, "/api/internal/official-realms/heartbeat", requestModel, cancellationToken);
     }
 
+    public Task<SchemaManifestResponse?> GetSchemaManifestAsync(CancellationToken cancellationToken)
+        => SendAuthorizedAsync<SchemaManifestResponse>(HttpMethod.Get, "/api/internal/schema/manifest", null, cancellationToken);
+
+    public Task<SchemaMigrationContentResponse?> GetSchemaMigrationAsync(string migrationId, CancellationToken cancellationToken)
+        => SendAuthorizedAsync<SchemaMigrationContentResponse>(
+            HttpMethod.Get,
+            $"/api/internal/schema/migrations/{Uri.EscapeDataString(migrationId)}",
+            null,
+            cancellationToken);
+
     private async Task<T?> SendAuthorizedAsync<T>(HttpMethod method, string relativePath, object? body, CancellationToken cancellationToken)
     {
         var client = _httpClientFactory.CreateClient(nameof(AuthApiClient));
