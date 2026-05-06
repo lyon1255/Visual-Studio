@@ -2,7 +2,6 @@ using GnosisRealmCore.Infrastructure;
 using GnosisRealmCore.Models;
 using GnosisRealmCore.Options;
 using Microsoft.Extensions.Options;
-using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -27,9 +26,9 @@ public sealed class AuthApiClient : IAuthApiClient
     public Task<GlobalGameDataSnapshotResponse?> GetGlobalGameDataSnapshotAsync(CancellationToken cancellationToken)
         => SendAuthorizedAsync<GlobalGameDataSnapshotResponse>(HttpMethod.Get, "/api/internal/gamedata/snapshot", null, cancellationToken);
 
-    public async Task SendOfficialHeartbeatAsync(OfficialRealmHeartbeatRequest request, CancellationToken cancellationToken)
+    public async Task SendOfficialHeartbeatAsync(OfficialRealmHeartbeatRequest requestModel, CancellationToken cancellationToken)
     {
-        _ = await SendAuthorizedAsync<object>(HttpMethod.Post, "/api/internal/official-realms/heartbeat", request, cancellationToken);
+        _ = await SendAuthorizedAsync<object>(HttpMethod.Post, "/api/internal/official-realms/heartbeat", requestModel, cancellationToken);
     }
 
     private async Task<T?> SendAuthorizedAsync<T>(HttpMethod method, string relativePath, object? body, CancellationToken cancellationToken)
@@ -42,8 +41,7 @@ public sealed class AuthApiClient : IAuthApiClient
         string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
         string nonce = Guid.NewGuid().ToString("N");
 
-        string canonical = string.Join("
-",
+        string canonical = string.Join("\n",
             method.Method.ToUpperInvariant(),
             relativePath,
             timestamp,

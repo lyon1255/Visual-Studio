@@ -61,7 +61,7 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
             }
         }
 
-        foreach (var file in Directory.GetFiles(migrationsDirectory, "*.sql").OrderBy(x => x, StringComparer.Ordinal))
+        foreach (var file in Directory.GetFiles(migrationsDirectory, "*.mysql").OrderBy(x => x, StringComparer.Ordinal))
         {
             var fileName = Path.GetFileName(file);
             var migrationId = Path.GetFileNameWithoutExtension(fileName);
@@ -118,8 +118,8 @@ public sealed class SchemaMigrationService : ISchemaMigrationService
 
     private static async Task ExecuteSqlBatchAsync(MySqlConnection connection, string sql, CancellationToken cancellationToken)
     {
-        var batches = sql.Split(";
-", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var batches = sql.Split(";\n", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
         foreach (var batch in batches)
         {
             if (string.IsNullOrWhiteSpace(batch))

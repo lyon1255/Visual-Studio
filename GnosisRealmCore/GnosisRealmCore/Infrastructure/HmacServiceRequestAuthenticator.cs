@@ -74,8 +74,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
             return false;
         }
 
-        var canonical = string.Join("
-",
+        var canonical = string.Join("\n",
             request.Method.ToUpperInvariant(),
             request.Path.Value ?? "/",
             timestampRaw,

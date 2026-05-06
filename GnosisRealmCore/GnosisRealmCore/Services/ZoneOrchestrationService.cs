@@ -51,7 +51,12 @@ public sealed class ZoneOrchestrationService : IZoneOrchestrationService
         }
 
         var pending = await _dbContext.RealmNodeCommands
-            .AnyAsync(x => x.NodeId == node.NodeId && x.Status == "pending" && x.CommandType == "start-zone" && x.PayloadJson.Contains($""zoneName":"{zoneName}""), cancellationToken);
+            .AnyAsync(x =>
+                x.NodeId == node.NodeId &&
+                x.Status == "pending" &&
+                x.CommandType == "start-zone" &&
+                x.PayloadJson.Contains($"\"zoneName\":\"{zoneName}\""),
+                cancellationToken);
 
         if (!pending)
         {
