@@ -1,6 +1,0 @@
-@GnosisAuthServer_HostAddress = http://localhost:5003
-
-GET {{GnosisAuthServer_HostAddress}}/weatherforecast/
-Accept: application/json
-
-###

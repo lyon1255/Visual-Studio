@@ -1,132 +1,125 @@
-﻿using GnosisAuthServer.Data;
-using Microsoft.AspNetCore.Authorization;
+using GnosisAuthServer.Infrastructure;
+using GnosisAuthServer.Models;
+using GnosisAuthServer.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
-using Microsoft.EntityFrameworkCore;
 
-namespace GnosisAuthServer.Controllers
+namespace GnosisAuthServer.Controllers;
+
+[ApiController]
+public sealed class GameDataController : ControllerBase
 {
-    [Route("api/[controller]")]
-    [ApiController]
-    public class GameDataController : ControllerBase
+    private readonly IServiceRequestAuthenticator _serviceRequestAuthenticator;
+    private readonly IAdminRequestValidator _adminRequestValidator;
+    private readonly IGameDataService _gameDataService;
+
+    public GameDataController(
+        IServiceRequestAuthenticator serviceRequestAuthenticator,
+        IAdminRequestValidator adminRequestValidator,
+        IGameDataService gameDataService)
     {
-        private readonly MasterDbContext _context;
-        private readonly IConfiguration _configuration;
+        _serviceRequestAuthenticator = serviceRequestAuthenticator;
+        _adminRequestValidator = adminRequestValidator;
+        _gameDataService = gameDataService;
+    }
 
-        public GameDataController(MasterDbContext context, IConfiguration configuration)
+    [HttpGet("api/gamedata/version")]
+    [HttpGet("api/internal/gamedata/version")]
+    [EnableRateLimiting("realm-gamedata-read")]
+    public async Task<IActionResult> GetVersion(CancellationToken cancellationToken)
+    {
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
         {
-            _context = context;
-            _configuration = configuration;
+            return Unauthorized(new { error });
         }
 
-        // --- KÖZÖS DTO (Unity JsonUtility 100% kompatibilis) ---
-        // Sima mezők (Fields), semmi Property ({ get; set; })!
-        public class SyncEntryDto
+        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
         {
-            public string assetId = string.Empty;
-            public string classType = string.Empty;
-            public string jsonData = string.Empty;
+            return Forbid();
         }
 
-        public class GameDataSyncPayload
-        {
-            public List<SyncEntryDto> items = new();
-            public List<SyncEntryDto> entities = new();
-            public List<SyncEntryDto> quests = new();
-            public List<SyncEntryDto> spells = new();
-            public List<SyncEntryDto> auras = new();
-        }
-        // --------------------------------------------------------
+        var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
+        return Ok(version);
+    }
 
-        private bool IsEditorAuthorized()
+    [HttpGet("api/gamedata/snapshot")]
+    [HttpGet("api/internal/gamedata/snapshot")]
+    [EnableRateLimiting("realm-gamedata-read")]
+    public async Task<IActionResult> GetSnapshot(CancellationToken cancellationToken)
+    {
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
         {
-            if (!Request.Headers.TryGetValue("X-Editor-Key", out var key)) return false;
-            return key.ToString() == _configuration["EditorSettings:SecretKey"];
+            return Unauthorized(new { error });
         }
 
-        private async Task<bool> IsValidRealmServer()
+        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
         {
-            if (!Request.Headers.TryGetValue("X-Server-Admin-Key", out var key)) return false;
-            string incomingKey = key.ToString();
-
-            bool isRegistered = await _context.Realms.AnyAsync(r => r.ApiKey == incomingKey);
-            if (isRegistered) return true;
-
-            return incomingKey == _configuration["ServerSetup:InitialKey"];
+            return Forbid();
         }
 
-        // --- VÉGPONTOK ---
+        var snapshot = await _gameDataService.GetCurrentSnapshotAsync(cancellationToken);
+        return Ok(snapshot);
+    }
 
-        [HttpGet("download")]
-        public async Task<IActionResult> DownloadGameDataServer()
+    [HttpGet("api/gamedata/prefabs")]
+    [HttpGet("api/internal/gamedata/prefabs")]
+    [EnableRateLimiting("realm-gamedata-read")]
+    public async Task<IActionResult> GetPrefabRegistry(CancellationToken cancellationToken)
+    {
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
         {
-            if (!await IsValidRealmServer() && !IsEditorAuthorized())
-                return Unauthorized(new { error = "Access denied (Server or Editor key missing)." });
-
-            // Betöltés az adatbázisból (PascalCase -> camelCase váltás)
-            var payload = new GameDataSyncPayload
-            {
-                items = await _context.GameItems.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                entities = await _context.GameEntities.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                quests = await _context.GameQuests.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                spells = await _context.GameSpells.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                auras = await _context.GameAuras.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync()
-            };
-
-            return Ok(payload);
+            return Unauthorized(new { error });
         }
 
-        [Authorize] // Játékosoknak marad a JWT!
-        [HttpGet("download_client")]
-        [EnableRateLimiting("ClientDataSync")]
-        public async Task<IActionResult> DownloadGameDataClient()
+        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
         {
-            // Teljesen ugyanaz a kód, mint a szerver letöltésnél
-            var payload = new GameDataSyncPayload
-            {
-                items = await _context.GameItems.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                entities = await _context.GameEntities.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                quests = await _context.GameQuests.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                spells = await _context.GameSpells.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync(),
-                auras = await _context.GameAuras.Select(x => new SyncEntryDto { assetId = x.AssetId, classType = x.ClassType, jsonData = x.JsonData }).ToListAsync()
-            };
-            return Ok(payload);
+            return Forbid();
         }
 
-        [HttpPost("upload")]
-        public async Task<IActionResult> UploadGameData([FromBody] GameDataSyncPayload payload)
+        var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
+
+        return Ok(new GlobalPrefabRegistryResponse
         {
-            if (!IsEditorAuthorized()) return Unauthorized(new { error = "Editor access denied." });
+            VersionNumber = version.VersionNumber,
+            VersionTag = version.VersionTag,
+            ContentHash = version.ContentHash,
+            PublishedAtUtc = version.PublishedAtUtc,
+        });
+    }
 
-            try
-            {
-                using var transaction = await _context.Database.BeginTransactionAsync();
+    [HttpGet("api/admin/gamedata/snapshot")]
+    public async Task<IActionResult> GetSnapshotForAdmin(CancellationToken cancellationToken)
+    {
+        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        {
+            return Unauthorized(new { error });
+        }
 
-                // Régi adatok törlése
-                _context.GameItems.RemoveRange(_context.GameItems);
-                _context.GameEntities.RemoveRange(_context.GameEntities);
-                _context.GameQuests.RemoveRange(_context.GameQuests);
-                _context.GameSpells.RemoveRange(_context.GameSpells);
-                _context.GameAuras.RemoveRange(_context.GameAuras);
-                await _context.SaveChangesAsync();
+        return Ok(await _gameDataService.GetCurrentSnapshotAsync(cancellationToken));
+    }
 
-                // Új adatok beszúrása (camelCase -> PascalCase visszaváltás)
-                _context.GameItems.AddRange(payload.items.Select(x => new DbItem { AssetId = x.assetId, ClassType = x.classType, JsonData = x.jsonData }));
-                _context.GameEntities.AddRange(payload.entities.Select(x => new DbEntity { AssetId = x.assetId, ClassType = x.classType, JsonData = x.jsonData }));
-                _context.GameQuests.AddRange(payload.quests.Select(x => new DbQuest { AssetId = x.assetId, ClassType = x.classType, JsonData = x.jsonData }));
-                _context.GameSpells.AddRange(payload.spells.Select(x => new DbSpell { AssetId = x.assetId, ClassType = x.classType, JsonData = x.jsonData }));
-                _context.GameAuras.AddRange(payload.auras.Select(x => new DbAura { AssetId = x.assetId, ClassType = x.classType, JsonData = x.jsonData }));
+    [HttpPost("api/admin/gamedata/replace")]
+    [EnableRateLimiting("admin-write")]
+    public async Task<IActionResult> ReplaceSnapshot([FromBody] ReplaceGlobalGameDataRequest request, CancellationToken cancellationToken)
+    {
+        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        {
+            return Unauthorized(new { error });
+        }
 
-                await _context.SaveChangesAsync();
-                await transaction.CommitAsync();
+        if (!ModelState.IsValid)
+        {
+            return ValidationProblem(ModelState);
+        }
 
-                return Ok(new { message = "Editor sync successful!" });
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[ERROR] GameData Sync failed: {ex.Message}");
-                return StatusCode(500);
-            }
+        try
+        {
+            var snapshot = await _gameDataService.ReplaceSnapshotAsync(request, cancellationToken);
+            return Ok(snapshot);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
     }
 }

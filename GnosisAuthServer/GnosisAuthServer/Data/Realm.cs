@@ -1,39 +1,66 @@
-﻿using System;
+using System.ComponentModel.DataAnnotations;
 using System.ComponentModel.DataAnnotations.Schema;
 
-namespace GnosisAuthServer.Data
+namespace GnosisAuthServer.Data;
+
+[Table("realms")]
+public sealed class Realm
 {
-    [Table("realms")]
-    public class Realm
-    {
-        [Column("id")]
-        public int Id { get; set; }
+    [Key]
+    [Column("id")]
+    public int Id { get; set; }
 
-        [Column("name")]
-        public string Name { get; set; } = string.Empty; // Pl. "Gnosis Official EU-West"
+    [Required]
+    [MaxLength(64)]
+    [Column("realm_id")]
+    public string RealmId { get; set; } = string.Empty;
 
-        [Column("region")]
-        public string Region { get; set; } = string.Empty;
+    [Required]
+    [MaxLength(128)]
+    [Column("display_name")]
+    public string DisplayName { get; set; } = string.Empty;
 
-        [Column("api_key")]
-        public string ApiKey { get; set; } = string.Empty; // A MasterHub titkos kulcsa
+    [Required]
+    [MaxLength(32)]
+    [Column("region")]
+    public string Region { get; set; } = string.Empty;
 
-        [Column("api_url")]
-        public string ApiUrl { get; set; } = string.Empty; // A kliens ide csatlakozik a karaktereiért
+    [Required]
+    [MaxLength(16)]
+    [Column("kind")]
+    public string Kind { get; set; } = "official";
 
-        [Column("status")]
-        public int Status { get; set; } // 0 = Offline, 1 = Online, 2 = Karbantartás
+    [Required]
+    [MaxLength(16)]
+    [Column("status")]
+    public string Status { get; set; } = "offline";
 
-        [Column("current_players")]
-        public int CurrentPlayers { get; set; } // Az összes zóna összesített játékosszáma
+    [Required]
+    [MaxLength(256)]
+    [Column("public_base_url")]
+    public string PublicBaseUrl { get; set; } = string.Empty;
 
-        [Column("max_players")]
-        public int MaxPlayers { get; set; }
+    [Column("current_players")]
+    public int CurrentPlayers { get; set; }
 
-        [Column("last_heartbeat")]
-        public DateTime LastHeartbeat { get; set; }
+    [Column("max_players")]
+    public int MaxPlayers { get; set; }
 
-        [Column("created_at")]
-        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-    }
+    [Column("healthy_zone_count")]
+    public int HealthyZoneCount { get; set; }
+
+    [Column("is_listed")]
+    public bool IsListed { get; set; } = true;
+
+    [Column("is_official")]
+    public bool IsOfficial { get; set; } = true;
+
+    [Column("last_heartbeat_at")]
+    public DateTime? LastHeartbeatAtUtc { get; set; }
+
+    [Column("created_at")]
+    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+
+    [Column("updated_at")]
+    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
 }
