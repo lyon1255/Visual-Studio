@@ -4,6 +4,7 @@ using GnosisRealmCore.Options;
 using GnosisRealmCore.Services;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -32,7 +33,7 @@ builder.Services.AddDbContext<RealmDbContext>(options =>
 });
 
 builder.Services.AddMemoryCache();
-builder.Services.AddHttpClient();
+builder.Services.AddHttpClient(nameof(AuthApiClient));
 builder.Services.AddControllers();
 
 var corsOptions = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>() ?? new CorsOptions();
@@ -42,7 +43,9 @@ builder.Services.AddCors(options =>
     {
         if (corsOptions.AllowedOrigins.Length == 0)
         {
-            policy.WithOrigins("https://localhost.invalid");
+            policy.WithOrigins("https://localhost.invalid")
+                .AllowAnyHeader()
+                .AllowAnyMethod();
         }
         else
         {
@@ -59,11 +62,13 @@ builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAu
 builder.Services.AddSingleton<ILegacyNodeApiKeyValidator, LegacyNodeApiKeyValidator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 
-builder.Services.AddScoped<IAuthApiClient, AuthApiClient>();
 builder.Services.AddScoped<ICharacterService, CharacterService>();
 builder.Services.AddScoped<IZoneOrchestrationService, ZoneOrchestrationService>();
+
+builder.Services.AddSingleton<IAuthApiClient, AuthApiClient>();
 builder.Services.AddSingleton<IGameDataCacheService, GameDataCacheService>();
 builder.Services.AddSingleton<ISchemaMigrationService, SchemaMigrationService>();
+
 builder.Services.AddHostedService<RealmHeartbeatHostedService>();
 
 var app = builder.Build();
@@ -72,7 +77,7 @@ var securityOptions = app.Services.GetRequiredService<IConfiguration>()
     .GetSection(SecurityOptions.SectionName)
     .Get<SecurityOptions>() ?? new SecurityOptions();
 
-if (securityOptions.KnownProxies.Length > 0 || securityOptions.KnownNetworks.Length > 0)
+if (securityOptions.KnownProxies.Length > 0 || securityOptions.KnownIPNetworks.Length > 0)
 {
     var forwardedHeadersOptions = new ForwardedHeadersOptions
     {
@@ -81,20 +86,17 @@ if (securityOptions.KnownProxies.Length > 0 || securityOptions.KnownNetworks.Len
 
     foreach (var proxy in securityOptions.KnownProxies)
     {
-        if (System.Net.IPAddress.TryParse(proxy, out var ip))
+        if (IPAddress.TryParse(proxy, out var ip))
         {
             forwardedHeadersOptions.KnownProxies.Add(ip);
         }
     }
 
-    foreach (var network in securityOptions.KnownNetworks)
+    foreach (var network in securityOptions.KnownIPNetworks)
     {
-        var parts = network.Split('/');
-        if (parts.Length == 2 &&
-            System.Net.IPAddress.TryParse(parts[0], out var networkIp) &&
-            int.TryParse(parts[1], out var prefix))
+        if (System.Net.IPNetwork.TryParse(network, out var ipNetwork))
         {
-            forwardedHeadersOptions.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(networkIp, prefix));
+            forwardedHeadersOptions.KnownIPNetworks.Add(ipNetwork);
         }
     }
 
