@@ -13,3 +13,6 @@
 /GnosisRealmServer/GnosisRealmServer/bin
 /GnosisAuthServer/GnosisAuthServer/Properties
 /GnosisRealmServer
+/GnosisRealmCore/.vs
+/GnosisRealmCore/GnosisRealmCore/bin
+/GnosisRealmCore/GnosisRealmCore/obj
