@@ -1,3 +1,4 @@
+using GnosisAuthServer.CommandMode;
 using GnosisAuthServer.Data;
 using GnosisAuthServer.Infrastructure;
 using GnosisAuthServer.Options;
@@ -218,6 +219,13 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+var commandExitCode = await AuthCommandModeRunner.TryRunAsync(app, args);
+if (commandExitCode.HasValue)
+{
+    Environment.ExitCode = commandExitCode.Value;
+    return;
+}
+
 app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
@@ -249,7 +257,11 @@ app.MapControllers();
 using (var scope = app.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
-    await dbContext.Database.CanConnectAsync();
+    var canConnect = await dbContext.Database.CanConnectAsync();
+    if (!canConnect)
+    {
+        throw new InvalidOperationException("Auth database connection check failed during startup.");
+    }
 }
 
 app.Run();
