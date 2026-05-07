@@ -77,7 +77,7 @@ public sealed class RealmRegistryService : IRealmRegistryService
             HealthyZoneCount = 0,
             IsListed = request.IsListed,
             IsOfficial = request.IsOfficial,
-            Enabled = true,
+            Enabled = request.Enabled,
             CreatedAt = nowUtc,
             UpdatedAt = nowUtc
         };
@@ -103,6 +103,7 @@ public sealed class RealmRegistryService : IRealmRegistryService
         entity.MaxPlayers = request.MaxPlayers;
         entity.IsListed = request.IsListed;
         entity.IsOfficial = request.IsOfficial;
+        entity.Enabled = request.Enabled;
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
