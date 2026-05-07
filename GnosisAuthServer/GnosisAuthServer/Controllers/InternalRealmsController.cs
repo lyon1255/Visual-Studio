@@ -2,19 +2,27 @@
 using GnosisAuthServer.Models;
 using GnosisAuthServer.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace GnosisAuthServer.Controllers;
 
 [ApiController]
 [Route("api/internal/realms")]
-public sealed class InternalRealmsController(
-    IServiceRequestAuthenticator serviceAuthenticator,
-    IRealmRegistryService realmRegistryService) : ControllerBase
+public sealed class InternalRealmsController : ControllerBase
 {
-    private readonly IServiceRequestAuthenticator _serviceAuthenticator = serviceAuthenticator;
-    private readonly IRealmRegistryService _realmRegistryService = realmRegistryService;
+    private readonly IServiceRequestAuthenticator _serviceAuthenticator;
+    private readonly IRealmRegistryService _realmRegistryService;
+
+    public InternalRealmsController(
+        IServiceRequestAuthenticator serviceAuthenticator,
+        IRealmRegistryService realmRegistryService)
+    {
+        _serviceAuthenticator = serviceAuthenticator;
+        _realmRegistryService = realmRegistryService;
+    }
 
     [HttpPost("heartbeat")]
+    [EnableRateLimiting("realm-heartbeat")]
     public async Task<IActionResult> Heartbeat(
         [FromBody] RealmHeartbeatRequest request,
         CancellationToken cancellationToken)

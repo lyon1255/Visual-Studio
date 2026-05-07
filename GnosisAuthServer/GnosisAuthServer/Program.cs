@@ -1,4 +1,3 @@
-// Program.cs (Auth)
 using GnosisAuthServer.Data;
 using GnosisAuthServer.Infrastructure;
 using GnosisAuthServer.Options;
@@ -77,7 +76,7 @@ builder.Services.AddControllers();
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        options.RequireHttpsMetadata = true;
+        options.RequireHttpsMetadata = !builder.Environment.IsDevelopment();
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -121,17 +120,6 @@ builder.Services.AddRateLimiter(options =>
             }));
 
     options.AddPolicy("realm-heartbeat", context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: GetServicePartitionKey(context),
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 12,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
-
-    options.AddPolicy("official-heartbeat", context =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: GetServicePartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
@@ -212,6 +200,18 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         if (IPAddress.TryParse(proxy, out var ip))
         {
             options.KnownProxies.Add(ip);
+        }
+    }
+
+    var configuredNetworks =
+        builder.Configuration.GetSection("Security:KnownIPNetworks").Get<string[]>()
+        ?? Array.Empty<string>();
+
+    foreach (var network in configuredNetworks)
+    {
+        if (System.Net.IPNetwork.TryParse(network, out var ipNetwork))
+        {
+            options.KnownIPNetworks.Add(ipNetwork);
         }
     }
 });

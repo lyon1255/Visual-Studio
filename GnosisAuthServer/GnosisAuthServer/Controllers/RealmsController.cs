@@ -36,9 +36,6 @@ public sealed class RealmsController : ControllerBase
             CurrentPlayers = x.CurrentPlayers,
             MaxPlayers = x.MaxPlayers,
             HealthyZoneCount = x.HealthyZoneCount,
-            Modded = x.Modded,
-            Motd = x.Motd,
-            Version = x.Version,
             LastHeartbeatAtUtc = x.LastHeartbeatAt
         }).ToList();
 

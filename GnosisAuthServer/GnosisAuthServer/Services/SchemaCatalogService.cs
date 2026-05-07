@@ -1,5 +1,4 @@
-﻿// SchemaCatalogService.cs
-using GnosisAuthServer.Models;
+﻿using GnosisAuthServer.Models;
 using GnosisAuthServer.Options;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
@@ -7,14 +6,21 @@ using System.Text;
 
 namespace GnosisAuthServer.Services;
 
-public sealed class SchemaCatalogService(
-    IWebHostEnvironment environment,
-    IOptions<SchemaDeliveryOptions> options,
-    ILogger<SchemaCatalogService> logger) : ISchemaCatalogService
+public sealed class SchemaCatalogService : ISchemaCatalogService
 {
-    private readonly IWebHostEnvironment _environment = environment;
-    private readonly SchemaDeliveryOptions _options = options.Value;
-    private readonly ILogger<SchemaCatalogService> _logger = logger;
+    private readonly IWebHostEnvironment _environment;
+    private readonly SchemaDeliveryOptions _options;
+    private readonly ILogger<SchemaCatalogService> _logger;
+
+    public SchemaCatalogService(
+        IWebHostEnvironment environment,
+        IOptions<SchemaDeliveryOptions> options,
+        ILogger<SchemaCatalogService> logger)
+    {
+        _environment = environment;
+        _options = options.Value;
+        _logger = logger;
+    }
 
     public async Task<SchemaManifestResponse> GetManifestAsync(CancellationToken cancellationToken = default)
     {
@@ -96,6 +102,11 @@ public sealed class SchemaCatalogService(
         CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || string.IsNullOrWhiteSpace(migrationId))
+        {
+            return null;
+        }
+
+        if (migrationId.Contains('/') || migrationId.Contains('\\'))
         {
             return null;
         }
