@@ -1,25 +1,32 @@
 ﻿using GnosisAuthServer.Infrastructure;
 using GnosisAuthServer.Services;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace GnosisAuthServer.Controllers;
 
 [ApiController]
 [Route("api/internal/schema")]
-public sealed class InternalSchemaController(
-    IServiceRequestAuthenticator serviceAuthenticator,
-    ISchemaCatalogService schemaCatalogService) : ControllerBase
+public sealed class InternalSchemaController : ControllerBase
 {
-    private readonly IServiceRequestAuthenticator _serviceAuthenticator = serviceAuthenticator;
-    private readonly ISchemaCatalogService _schemaCatalogService = schemaCatalogService;
+    private readonly IServiceRequestAuthenticator _serviceAuthenticator;
+    private readonly ISchemaCatalogService _schemaCatalogService;
 
+    public InternalSchemaController(
+        IServiceRequestAuthenticator serviceAuthenticator,
+        ISchemaCatalogService schemaCatalogService)
+    {
+        _serviceAuthenticator = serviceAuthenticator;
+        _schemaCatalogService = schemaCatalogService;
+    }
 
     [HttpGet("manifest")]
+    [EnableRateLimiting("realm-schema-read")]
     public async Task<IActionResult> GetManifest(CancellationToken cancellationToken)
     {
-        if (!TryAuthorize("realm-schema.read", out var denied))
+        if (!_serviceAuthenticator.TryAuthenticate(Request, out _, out var error))
         {
-            return denied!;
+            return Unauthorized(new { error });
         }
 
         var manifest = await _schemaCatalogService.GetManifestAsync(cancellationToken);
@@ -27,11 +34,12 @@ public sealed class InternalSchemaController(
     }
 
     [HttpGet("migrations/{migrationId}")]
+    [EnableRateLimiting("realm-schema-read")]
     public async Task<IActionResult> GetMigration(string migrationId, CancellationToken cancellationToken)
     {
-        if (!TryAuthorize("realm-schema.read", out var denied))
+        if (!_serviceAuthenticator.TryAuthenticate(Request, out _, out var error))
         {
-            return denied!;
+            return Unauthorized(new { error });
         }
 
         var migration = await _schemaCatalogService.GetMigrationAsync(migrationId, cancellationToken);
@@ -41,24 +49,5 @@ public sealed class InternalSchemaController(
         }
 
         return Ok(migration);
-    }
-
-    private bool TryAuthorize(string requiredRole, out IActionResult? denied)
-    {
-        denied = null;
-
-        if (!_serviceAuthenticator.TryAuthenticate(Request, out var context, out var error))
-        {
-            denied = Unauthorized(new { error });
-            return false;
-        }
-
-        if (context is null || context.Roles is null || !context.Roles.Contains(requiredRole, StringComparer.Ordinal))
-        {
-            denied = Forbid();
-            return false;
-        }
-
-        return true;
     }
 }

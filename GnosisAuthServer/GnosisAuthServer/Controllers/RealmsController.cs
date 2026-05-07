@@ -29,7 +29,7 @@ public sealed class RealmsController : ControllerBase
             RealmId = x.RealmId,
             DisplayName = x.DisplayName,
             Region = x.Region,
-            RealmType = x.RealmType,
+            IsOfficial = x.IsOfficial,
             Kind = x.Kind,
             PublicBaseUrl = x.PublicBaseUrl,
             Status = x.Status,

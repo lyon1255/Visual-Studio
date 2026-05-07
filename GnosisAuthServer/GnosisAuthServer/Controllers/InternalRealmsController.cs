@@ -37,20 +37,10 @@ public sealed class InternalRealmsController : ControllerBase
             return Unauthorized(new { error = "Missing service auth context." });
         }
 
-        var isOfficialCaller = context.Roles.Contains(ServiceRoles.OfficialRealmHeartbeatWrite, StringComparer.Ordinal);
-        var isCommunityCaller = context.Roles.Contains(ServiceRoles.CommunityRealmHeartbeatWrite, StringComparer.Ordinal);
-
-        if (!isOfficialCaller && !isCommunityCaller)
-        {
-            return Forbid();
-        }
-
         try
         {
             await _realmRegistryService.UpsertHeartbeatAsync(
                 request,
-                isOfficialCaller,
-                isCommunityCaller,
                 context.ServiceId,
                 context.AllowedRealmIds,
                 cancellationToken);

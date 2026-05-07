@@ -28,7 +28,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
 
         if (!_options.Enabled)
         {
-            context = new ServiceAuthContext("disabled", Array.Empty<string>(), Array.Empty<string>());
+            context = new ServiceAuthContext("disabled", Array.Empty<string>());
             return true;
         }
 
@@ -94,6 +94,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
 
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(client.Secret));
         var computedSignature = hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical));
+
         if (!CryptographicOperations.FixedTimeEquals(computedSignature, receivedSignature))
         {
             _logger.LogWarning("Service authentication failed for {ServiceId}: invalid signature.", serviceId);
@@ -101,7 +102,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
             return false;
         }
 
-        context = new ServiceAuthContext(client.ServiceId, client.Roles, client.AllowedRealmIds);
+        context = new ServiceAuthContext(client.ServiceId, client.AllowedRealmIds);
         return true;
     }
 }

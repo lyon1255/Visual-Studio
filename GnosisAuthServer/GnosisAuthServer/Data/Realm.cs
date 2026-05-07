@@ -64,22 +64,6 @@ public sealed class Realm
     [Column("updated_at")]
     public DateTime UpdatedAt { get; set; }
 
-    [Required]
-    [MaxLength(32)]
-    [Column("realm_type")]
-    public string RealmType { get; set; } = "official";
-
-    [MaxLength(256)]
-    [Column("motd")]
-    public string? Motd { get; set; }
-
-    [MaxLength(64)]
-    [Column("version")]
-    public string? Version { get; set; }
-
-    [Column("modded")]
-    public bool Modded { get; set; }
-
     [Column("enabled")]
     public bool Enabled { get; set; } = true;
 }

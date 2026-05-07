@@ -7,28 +7,30 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace GnosisAuthServer.Controllers;
 
 [ApiController]
-public sealed class GameDataController(
-    IServiceRequestAuthenticator serviceRequestAuthenticator,
-    IAdminRequestValidator adminRequestValidator,
-    IGameDataService gameDataService) : ControllerBase
+public sealed class GameDataController : ControllerBase
 {
-    private readonly IServiceRequestAuthenticator _serviceRequestAuthenticator = serviceRequestAuthenticator;
-    private readonly IAdminRequestValidator _adminRequestValidator = adminRequestValidator;
-    private readonly IGameDataService _gameDataService = gameDataService;
+    private readonly IServiceRequestAuthenticator _serviceRequestAuthenticator;
+    private readonly IAdminRequestValidator _adminRequestValidator;
+    private readonly IGameDataService _gameDataService;
+
+    public GameDataController(
+        IServiceRequestAuthenticator serviceRequestAuthenticator,
+        IAdminRequestValidator adminRequestValidator,
+        IGameDataService gameDataService)
+    {
+        _serviceRequestAuthenticator = serviceRequestAuthenticator;
+        _adminRequestValidator = adminRequestValidator;
+        _gameDataService = gameDataService;
+    }
 
     [HttpGet("api/gamedata/version")]
     [HttpGet("api/internal/gamedata/version")]
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetVersion(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
         {
             return Unauthorized(new { error });
-        }
-
-        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
-        {
-            return Forbid();
         }
 
         var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
@@ -40,14 +42,9 @@ public sealed class GameDataController(
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetSnapshot(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
         {
             return Unauthorized(new { error });
-        }
-
-        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
-        {
-            return Forbid();
         }
 
         var snapshot = await _gameDataService.GetCurrentSnapshotAsync(cancellationToken);
@@ -59,14 +56,9 @@ public sealed class GameDataController(
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetPrefabRegistry(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out var context, out var error))
+        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
         {
             return Unauthorized(new { error });
-        }
-
-        if (context is null || !context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase))
-        {
-            return Forbid();
         }
 
         var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
@@ -76,7 +68,7 @@ public sealed class GameDataController(
             VersionNumber = version.VersionNumber,
             VersionTag = version.VersionTag,
             ContentHash = version.ContentHash,
-            PublishedAtUtc = version.PublishedAtUtc,
+            PublishedAtUtc = version.PublishedAtUtc
         });
     }
 

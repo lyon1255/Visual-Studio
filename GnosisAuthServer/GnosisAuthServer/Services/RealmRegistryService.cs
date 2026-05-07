@@ -24,8 +24,7 @@ public sealed class RealmRegistryService : IRealmRegistryService
 
     public async Task<IReadOnlyList<Realm>> GetPublicRealmsAsync(CancellationToken cancellationToken = default)
     {
-        var now = DateTime.UtcNow;
-        var cutoff = now.AddSeconds(-Math.Max(30, _options.HeartbeatTimeoutSeconds));
+        var cutoff = DateTime.UtcNow.AddSeconds(-Math.Max(30, _options.HeartbeatTimeoutSeconds));
 
         var query = _dbContext.Realms
             .AsNoTracking()
@@ -78,7 +77,6 @@ public sealed class RealmRegistryService : IRealmRegistryService
             HealthyZoneCount = 0,
             IsListed = request.IsListed,
             IsOfficial = request.IsOfficial,
-            RealmType = request.IsOfficial ? "official" : "community",
             Enabled = true,
             CreatedAt = nowUtc,
             UpdatedAt = nowUtc
@@ -105,7 +103,6 @@ public sealed class RealmRegistryService : IRealmRegistryService
         entity.MaxPlayers = request.MaxPlayers;
         entity.IsListed = request.IsListed;
         entity.IsOfficial = request.IsOfficial;
-        entity.RealmType = request.IsOfficial ? "official" : "community";
         entity.UpdatedAt = DateTime.UtcNow;
 
         await _dbContext.SaveChangesAsync(cancellationToken);
@@ -114,17 +111,10 @@ public sealed class RealmRegistryService : IRealmRegistryService
 
     public async Task UpsertHeartbeatAsync(
         RealmHeartbeatRequest request,
-        bool isOfficialCaller,
-        bool isCommunityCaller,
         string callerServiceId,
         IReadOnlyCollection<string> allowedRealmIds,
         CancellationToken cancellationToken = default)
     {
-        if (!isOfficialCaller && !isCommunityCaller)
-        {
-            throw new UnauthorizedAccessException("Caller is not allowed to send realm heartbeat.");
-        }
-
         if (allowedRealmIds.Count == 0)
         {
             throw new UnauthorizedAccessException("Heartbeat client must have AllowedRealmIds configured.");
@@ -144,9 +134,15 @@ public sealed class RealmRegistryService : IRealmRegistryService
                 $"Realm '{request.RealmId}' does not exist. Create it first through the admin API.");
         }
 
+        var normalizedStatus = request.Status.Trim().ToLowerInvariant();
+        if (normalizedStatus is not ("online" or "degraded" or "offline"))
+        {
+            throw new InvalidOperationException("Status must be 'online', 'degraded', or 'offline'.");
+        }
+
         var nowUtc = DateTime.UtcNow;
 
-        realm.Status = request.Status.Trim();
+        realm.Status = normalizedStatus;
         realm.CurrentPlayers = request.CurrentPlayers;
         realm.MaxPlayers = request.MaxPlayers;
         realm.HealthyZoneCount = request.HealthyZoneCount;
