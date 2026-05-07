@@ -30,4 +30,6 @@ public sealed class AdminRealmUpsertRequest
     public bool IsListed { get; set; } = true;
 
     public bool IsOfficial { get; set; } = true;
+
+    public bool Enabled { get; set; } = true;
 }
