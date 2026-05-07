@@ -7,19 +7,14 @@ using System.Text.Json;
 
 namespace GnosisAuthServer.Services;
 
-public sealed class GameDataService : IGameDataService
+public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
 {
-    private static readonly JsonSerializerOptions CanonicalJsonOptions = new JsonSerializerOptions
+    private static readonly JsonSerializerOptions CanonicalJsonOptions = new()
     {
         WriteIndented = false
     };
 
-    private readonly AuthDbContext _dbContext;
-
-    public GameDataService(AuthDbContext dbContext)
-    {
-        _dbContext = dbContext;
-    }
+    private readonly AuthDbContext _dbContext = dbContext;
 
     public async Task<GlobalGameDataVersionResponse> GetCurrentVersionAsync(CancellationToken cancellationToken)
     {
@@ -58,11 +53,11 @@ public sealed class GameDataService : IGameDataService
             VersionTag = latest.VersionTag,
             ContentHash = latest.ContentHash,
             PublishedAtUtc = latest.PublishedAtUtc,
-            Items = (await ProjectEntriesAsync(_dbContext.GameItems, cancellationToken)).ToList(),
-            Entities = (await ProjectEntriesAsync(_dbContext.GameEntities, cancellationToken)).ToList(),
-            Quests = (await ProjectEntriesAsync(_dbContext.GameQuests, cancellationToken)).ToList(),
-            Spells = (await ProjectEntriesAsync(_dbContext.GameSpells, cancellationToken)).ToList(),
-            Auras = (await ProjectEntriesAsync(_dbContext.GameAuras, cancellationToken)).ToList()
+            Items = [.. (await ProjectEntriesAsync(_dbContext.GameItems, cancellationToken))],
+            Entities = [.. (await ProjectEntriesAsync(_dbContext.GameEntities, cancellationToken))],
+            Quests = [.. (await ProjectEntriesAsync(_dbContext.GameQuests, cancellationToken))],
+            Spells = [.. (await ProjectEntriesAsync(_dbContext.GameSpells, cancellationToken))],
+            Auras = [.. (await ProjectEntriesAsync(_dbContext.GameAuras, cancellationToken))]
         };
     }
 
@@ -163,7 +158,7 @@ public sealed class GameDataService : IGameDataService
 
     private static List<GameDataEntryDto> Normalize(List<GameDataEntryDto> entries)
     {
-        return entries
+        return [.. entries
             .Select(x => new GameDataEntryDto
             {
                 AssetId = x.AssetId.Trim(),
@@ -172,8 +167,7 @@ public sealed class GameDataService : IGameDataService
                 IsEnabled = x.IsEnabled
             })
             .OrderBy(x => x.AssetId, StringComparer.Ordinal)
-            .ThenBy(x => x.ClassType, StringComparer.Ordinal)
-            .ToList();
+            .ThenBy(x => x.ClassType, StringComparer.Ordinal)];
     }
 
     private static string CanonicalizeJson(string json)
@@ -184,7 +178,7 @@ public sealed class GameDataService : IGameDataService
 
     private static IEnumerable<T> MapEntries<T>(IEnumerable<GameDataEntryDto> entries, DateTime utcNow) where T : GameDataBaseEntity, new()
     {
-        return Normalize(entries.ToList()).Select(x => new T
+        return Normalize([.. entries]).Select(x => new T
         {
             AssetId = x.AssetId,
             ClassType = x.ClassType,

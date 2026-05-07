@@ -4,38 +4,41 @@
 
 A `GnosisAuthServer` a Gnosis Online rendszer globalis Auth API-ja.
 
-Ez a szolgaltatas felel a kovetkezokert:
+Ez a szolgaltatas a kovetkezo feladatokat latja el:
 
-* jatekos bejelentkeztetes
-* access token kiadas
-* realm lista kiszolgalasa
-* official realm status nyilvantartasa
+* jatekos login Steam ticket alapon
+* RSA alapu JWT access token kiadas
+* official es community realm lista kiszolgalasa a kliens fele
+* official realm heartbeat fogadas belso, hitelesitett endpointon
 * globalis, canonical GameData tarolasa
-* admin muveletek kiszolgalasa
+* internal schema manifest es migration tartalom kiszolgalasa a RealmCore fele
+* admin endpointok kiszolgalasa realm es GameData kezeleshez
+* health check endpointok biztosítása uzemeltetesi ellenorzeshez
 
-Ez a projekt nem a teljes backend, hanem a rendszer egyik kozponti eleme.
+Ez a projekt a teljes backend egyik kozponti eleme, nem pedig a teljes rendszer onmagaban.
 
-A hosszabb tavu architekturaban a szerepek igy neznek ki:
+A teljes rendszerben a szerepek logikailag igy kulonulnek el:
 
-* **AuthApi**
+* **GnosisAuthServer**
 
   * globalis auth
   * realm lista
   * canonical GameData
-* **RealmCoreApi**
+  * schema delivery source
+* **GnosisRealmCore**
 
-  * save/load
+  * realm save/load
   * merged GameData cache
-  * zone info
-  * realm szintu logika
-* **NodeAgent**
+  * schema migration vegrehajtas a sajat DB-re
+  * zone, node es heartbeat logika
+* **Gnosis Node Agent**
 
-  * zone process inditas es felugyelet
-* **GameServer**
+  * zone processzek inditasa es felugyelete
+* **Game Server**
 
-  * konkret gameplay es zonafuttatas
+  * konkret runtime gameplay
 
-Az `AuthApi` magasabb bizalmi szintu komponens, mint a realm vagy a jatek szerverek. Ezert productionben nem szabad ugy kezelni, mint egy egyszeru publikus weboldalt.
+Az Auth API magasabb bizalmi szintu komponens, mint a realm vagy a jatekszerverek, ezert production kornyezetben ugy kell uzemeltetni, mint egy erzekeny backend szolgaltatast.
 
 ---
 
@@ -43,19 +46,19 @@ Az `AuthApi` magasabb bizalmi szintu komponens, mint a realm vagy a jatek szerve
 
 ### 2.1 Jatekos auth
 
-Az Auth API fogadja a login kerelmeket, ellenorzi az auth folyamatot, es access tokent ad vissza.
+Az Auth API fogadja a login kerelmeket, ellenorzi a Steam ticketet, es access tokent ad vissza.
 
 ### 2.2 Realm lista
 
-Az Auth API adja vissza, hogy milyen official realmek lathatoak online-nak.
+Az Auth API adja vissza, hogy milyen realmek lathatoak a kliens szamara.
 
 ### 2.3 Official realm heartbeat
 
-Az official RealmCoreApi hitelesitett heartbeatet kuld ide. Az Auth API ezek alapjan tudja, hogy egy realm elerheto-e.
+Az official RealmCore hitelesitett heartbeatet kuld az Auth API-nak. Ez alapjan az Auth API frissiti a realm statuszt, jatekos letszamot es a healthy zone darabszamot.
 
 ### 2.4 Global GameData
 
-Az Auth API tarolja az alap, canonical GameData-t, peldaul:
+Az Auth API tarolja a canonical GameData-t, peldaul:
 
 * Items
 * Entities
@@ -63,24 +66,197 @@ Az Auth API tarolja az alap, canonical GameData-t, peldaul:
 * Spells
 * Auras
 
-A kesobbi RealmCoreApi ezt lekerni, cache-elni es merge-elni fogja a sajat override-jaival.
+Ez a globalis alap adatforras. A RealmCore ezt lekerni, cache-elni es merge-elni fogja a sajat realm override-jaival.
 
-### 2.5 Admin muveletek
+### 2.5 Schema delivery
 
-Az admin endpointokkal lehet peldaul:
+Az Auth API tarolja es kiszolgalja a RealmCore schema migration manifestet es a migration tartalmat.
 
-* realmeket kezelni
-* global GameData-t cserelni
-* bizonyos fejlesztoi muveleteket vegrehajtani
+Ez azt jelenti, hogy a RealmCore nem helyi migration fajlokkal dolgozik, hanem az Auth API-tol keri le a schema valtozasokat, majd a sajat adatbazisara hajtja vegre azokat.
+
+### 2.6 Admin muveletek
+
+Az admin endpointokkal lehet:
+
+* realmeket letrehozni es modositani
+* globalis GameData snapshotot cserelni
+* admin szintu ellenorzo muveleteket vegezni
 
 ---
 
-## 3. Fajl- es mappaszerkezet
+## 3. Magas szintu mukodesi elv
 
-Ez a README **nem** szamol a `/opt/gnosis/authapi/src` mappaval.
-A source kod szerverre telepitese **nem szukseges**.
+A rendszer a kovetkezo fo kommunikacios iranyokat kuloniti el.
 
-A telepiteshez csak a publisholt output kell.
+### Kliens -> Auth API
+
+A kliens innen kapja:
+
+* Steam login
+* JWT access token
+* realm lista
+* sajat account adatokat
+
+### Official RealmCore -> Auth API
+
+Az official realm backend innen kapja vagy ide kuldi:
+
+* heartbeat
+* global GameData
+* schema manifest
+* migration tartalom
+
+### Admin -> Auth API
+
+Az admin muveletek kulon header alapjan vannak vedve.
+
+Fontos:
+
+* a public kliens endpointok es az internal service endpointok kulon szinten vannak kezelve
+* a public auth JWT-vel megy
+* az internal hivasok HMAC + nonce alapu service auth-tal mennek
+* az admin muveletek kulon header + IP whitelist alapjan vedettek
+
+---
+
+## 4. Fontos endpointok
+
+## 4.1 Public auth endpointok
+
+### `POST /api/auth/steam`
+
+Steam login.
+
+Feladata:
+
+* SteamId + ticket fogadasa
+* Steam validacio
+* account letrehozas vagy frissites
+* access token kiadas
+
+### `GET /api/auth/me`
+
+Az aktualis felhasznalo adatait adja vissza ervenyes JWT mellett.
+
+### `GET /api/auth/servers`
+
+Realm lista endpoint a kliens szamara.
+
+Alias endpoint:
+
+* `GET /api/realms`
+
+---
+
+## 4.2 Internal official realm endpointok
+
+### `POST /api/internal/official-realms/heartbeat`
+
+Official realm heartbeat endpoint.
+
+Feladata:
+
+* official realm status frissitese
+* current players
+* max players
+* healthy zone count
+* utolso heartbeat ido frissitese
+
+Ez az endpoint nem publikus.
+Csak service auth-tal hivhato.
+
+---
+
+## 4.3 Internal GameData endpointok
+
+### `GET /api/internal/gamedata/version`
+
+A global GameData aktualis verziojat adja vissza.
+
+Alias:
+
+* `GET /api/gamedata/version`
+
+### `GET /api/internal/gamedata/snapshot`
+
+A teljes global GameData snapshotot adja vissza.
+
+Alias:
+
+* `GET /api/gamedata/snapshot`
+
+### `GET /api/internal/gamedata/prefabs`
+
+Prefab registry jellegu endpoint.
+
+Alias:
+
+* `GET /api/gamedata/prefabs`
+
+Megjegyzes:
+a jelenlegi kodban ez a valasz a verzio metadata mellett prefab listara van elokeszitve, de a konkret prefab adatmodell kezeleset kulon figyelni kell a GameDataService implementacioban.
+
+---
+
+## 4.4 Internal schema endpointok
+
+### `GET /api/internal/schema/manifest`
+
+A RealmCore innen kerdezi le, hogy milyen migrationok leteznek.
+
+### `GET /api/internal/schema/migrations/{migrationId}`
+
+A RealmCore innen keri le egy adott migration teljes tartalmat.
+
+Fontos:
+
+* ezek az endpointok belso endpointok
+* service auth kell hozzajuk
+* a RealmCore ezeket a sajat DB schema frissitesehez hasznalja
+
+---
+
+## 4.5 Admin endpointok
+
+### `GET /api/admin/realms`
+
+Az osszes realm listazasa admin celra.
+
+### `POST /api/admin/realms`
+
+Realm letrehozas.
+
+### `PUT /api/admin/realms/{realmId}`
+
+Realm modositas.
+
+### `GET /api/admin/gamedata/snapshot`
+
+A jelenlegi global GameData snapshot admin lekerdezese.
+
+### `POST /api/admin/gamedata/replace`
+
+A global GameData teljes cserje.
+
+---
+
+## 4.6 Health endpointok
+
+### `GET /health/live`
+
+A process eletben van-e.
+
+### `GET /health/ready`
+
+Az alkalmazas kesz allapotban van-e, kulonosen adatbazis kapcsolat szempontjabol.
+
+---
+
+## 5. Fajl- es mappaszerkezet
+
+A szerverre telepiteshez **nem kell source kod**.
+
+A telepiteshez a publish output kell.
 
 Javasolt szerkezet:
 
@@ -91,27 +267,48 @@ Javasolt szerkezet:
     GnosisAuthServer.pdb
     appsettings.json
     appsettings.Development.json
-    dotnet-tools.json
     appsettings.Production.json
+    dotnet-tools.json
     keys/
       auth_private.pem
       auth_public.pem
+    SchemaMigrations/
+      realmcore/
+        0001_initial_schema.mysql
+        0002_....mysql
     logs/
+  bootstrap.sql
 ```
 
 ### Fontos
 
-A te publish formadban **nem `.dll` fajl** jon letre, hanem egy futtathato fajl:
+A jelenlegi publish kimenet nalad egy Linuxon futtathato binaris:
 
 ```text
 GnosisAuthServer
 ```
 
-Ez azt jelenti, hogy a systemd service **nem** `dotnet GnosisAuthServer.dll` modon fog indulni, hanem **kozvetlenul a binarist** kell futtatni.
+Tehat a futtatas nem `dotnet GnosisAuthServer.dll`, hanem kozvetlen binary inditas.
+
+### Fontos a schema mappanal
+
+A kod alapjan a helyes elvart mappa:
+
+```text
+SchemaMigrations/realmcore
+```
+
+A file kiterjesztes pedig:
+
+```text
+*.mysql
+```
+
+Ez fontos, mert a `SchemaCatalogService` ezt a mappat olvassa, es csak ezt a kiterjesztest figyeli.
 
 ---
 
-## 4. A projekt fo reszei
+## 6. A projekt fo reszei
 
 ### `Program.cs`
 
@@ -121,294 +318,452 @@ Feladata:
 
 * konfiguracio betoltese
 * szolgaltatasok regisztralasa
-* security pipeline felallitasa
 * adatbazis kapcsolat ellenorzese
-* Kestrel inditasa
+* JWT auth pipeline felallitasa
+* rate limiting bekotese
+* CORS bekotese
+* forwarded headers kezeles
+* Kestrel URL beallitas
+* middleware pipeline inditasa
 
 ### `Controllers/AuthController.cs`
 
-A kliens oldali auth folyamathoz tartozo vegpontok.
+A public login es account endpointok.
 
-Tipikus feladatai:
+Feladata:
 
-* login
+* Steam login
+* account letrehozas
 * token kiadas
-* `me`
-* realm lista
+* `me` endpoint
 
-### `Controllers/RealmStatusController.cs`
+### `Controllers/RealmsController.cs`
 
-A hivatalos realm heartbeat endpoint.
+A kliens fele realm listat adja vissza.
 
-Tipikus feladatai:
+### `Controllers/InternalOfficialRealmsController.cs`
 
-* heartbeat fogadas
-* realm status frissites
-* unhealthy realm kezeles
-
-### `Controllers/AdminRealmsController.cs`
-
-Admin vegpontok a realm registryhez.
-
-Tipikus feladatai:
-
-* realm letrehozas
-* realm modositas
-* realm engedelyezes / tiltas
-* service auth adatok kezelese
+Az official realm heartbeat endpoint.
 
 ### `Controllers/GameDataController.cs`
 
-A globalis GameData kiszolgalasa es admin kezeles.
+A global GameData endpointok es az admin oldali snapshot csere.
 
-Tipikus feladatai:
+### `Controllers/InternalSchemaController.cs`
 
-* version endpoint
-* snapshot endpoint
-* admin replace endpoint
+A schema manifest es migration content kiszolgalasa a RealmCore fele.
+
+### `Controllers/AdminRealmsController.cs`
+
+Realm admin muveletek.
 
 ### `Controllers/HealthController.cs`
 
-Health check vegpontok.
+Liveness es readiness endpointok.
 
-Tipikus feladatai:
+### `Data/AuthDbContext.cs`
 
-* `live`
-* `ready`
+Az EF Core DbContext.
 
-### `Data/`
+### `Data/Account.cs`
 
-Az adatbazis modellek es a DbContext.
+A jatekos account tabla modellje.
 
-Tipikus fajlok:
+### `Data/Realm.cs`
 
-* `Account.cs`
-* `Realm.cs`
-* `RealmHeartbeatNonce.cs`
-* `MasterDbContext.cs`
+A realm registry tabla modellje.
 
-### `Models/`
+### `Data/GameDataEntities.cs`
 
-A request, response es GameData contract modellek.
+A global GameData tablakat leiro modellek.
 
-### `Options/`
+A jelenlegi tablák:
 
-A konfiguracios osztalyok.
+* `gamedata_items`
+* `gamedata_entities`
+* `gamedata_quests`
+* `gamedata_spells`
+* `gamedata_auras`
+* `gamedata_versions`
+
+### `Infrastructure/`
+
+Belso auth es vedelmi segedosztalyok.
+
+Peldak:
+
+* `HmacServiceRequestAuthenticator`
+* `MemoryNonceStore`
+* `HeaderAdminRequestValidator`
+* `ServiceAuthHeaderNames`
+* `ServiceRoles`
 
 ### `Security/`
 
-A JWT, HMAC, nonce es replay vedelemhez kapcsolodo kod.
+RSA kulcsbetoltes.
+
+Peldak:
+
+* `FileRsaKeyProvider`
+* `IRsaKeyProvider`
 
 ### `Services/`
 
-Az uzleti logika, peldaul:
+Uzleti logika.
 
-* auth service
-* token service
-* GameData service
-* Steam validator
-* nonce service
+Peldak:
+
+* `JwtTokenService`
+* `SteamTicketValidator`
+* `RealmRegistryService`
+* `GameDataService`
+* `SchemaCatalogService`
+
+### `Options/`
+
+A konfiguracios szekciokhoz tartozo strongly typed osztalyok.
+
+Peldak:
+
+* `DatabaseOptions`
+* `JwtOptions`
+* `SteamOptions`
+* `RealmRegistryOptions`
+* `ServiceAuthOptions`
+* `SecurityOptions`
+* `CorsOptions`
+* `AdminOptions`
+* `SchemaDeliveryOptions`
 
 ### `Sql/bootstrap.sql`
 
-Az adatbazis alap schema-ja.
+Az elso indulashoz szukseges alap adatbazis schema.
 
-Ez az egyetlen source jellegu fajl, amit az elso telepiteshez kulon fel kell tolteni a szerverre, ha nincs automatikus migration.
+### `keys/README.txt`
 
----
-
-## 5. Security modell roviden
-
-A projekt security modellje az alabbi alapelvekre epul:
-
-* nincs nyitott `AllowAnyOrigin` policy productionben
-* nincs automatikus realm regisztracio egy random heartbeat alapjan
-* a JWT RSA kulcspaar alapon megy
-* a service-to-service auth HMAC + nonce alapu
-* replay vedelem van
-* az Auth API publikus oldala reverse proxy mogott fut
-* az alkalmazas maga csak helyi vagy belso endpointon hallgasson
-* a MySQL es Redis ne legyen publikus internetre nyitva
-* admin endpoint ne legyen barki szamara elerheto
+Leiras a JWT PEM kulcsokrol.
 
 ---
 
-## 6. Telepitesi modell
+## 7. appsettings konfiguracio leirasa
 
-Ez a README az alabbi egyszeru uzemi moddal szamol:
+A projekt a kovetkezo forrasokbol olvas konfiguraciot:
 
-* 1 darab Ubuntu VPS
-* AuthApi a sajat gepen fut
-* Nginx reverse proxy kezeli a publikus bejovo forgalmat
-* MySQL helyben fut
-* kesobb RealmCore es NodeAgent is mehet ugyanarra a gepe vagy kulon gepre
+* `appsettings.json`
+* `appsettings.{Environment}.json`
+* `GNOSIS_AUTH_` prefixu environment valtozok
 
-A lenyeg:
+A gyakorlatban productionben ez a legfontosabb:
 
-* **AuthApi** -> helyi porton hallgat
-* **Nginx** -> publikus HTTPS
-* **MySQL** -> helyi eleres
-* **JWT kulcsok** -> kulon PEM fajlokban
+```text
+/opt/gnosis/authapi/app/appsettings.Production.json
+```
+
+## 7.1 `Urls`
+
+Pelda:
+
+```json
+"Urls": "http://127.0.0.1:5158"
+```
+
+Mit csinal:
+
+* megmondja, hogy a Kestrel hol hallgasson
+
+Javaslat:
+
+* maradjon `127.0.0.1:5158`
+* a publikus HTTPS-t az Nginx vegye at
 
 ---
 
-## 7. Mire van szukseg az elso inditashoz?
+## 7.2 `Database`
 
-Szukseges csomagok:
+Pelda:
 
-* nginx
-* mysql-server
-* openssl
-* unzip
-
-Ha a szerveren **nem** akarsz buildelni, akkor a source kod es a `dotnet publish` szerver oldalon **nem szukseges**.
-
-Mivel te Visual Studio-bol publisholsz, ez a helyes folyamat:
-
-1. Visual Studio-bol publish
-2. a publish outputot feltoltod a VPS-re
-3. kulon feltoltod a `bootstrap.sql` fajlt
-4. letrehozod az RSA kulcsokat
-5. letrehozod az `appsettings.Production.json` fajlt
-6. beallitod a MySQL adatbazist
-7. elinditod az alkalmazast
-8. utana systemd ala rakod
-9. vegul Nginx reverse proxy moge teszed
-
----
-
-## 8. A helyes telepitesi celmappa
-
-A publisholt fajlokat **kozvetlenul** ide kell feltolteni:
-
-```text
-/opt/gnosis/authapi/app
+```json
+"Database": {
+  "ConnectionString": "Server=127.0.0.1;Port=3306;Database=gnosis_auth;User=gnosis_auth;Password=CHANGE_ME;SslMode=Required;"
+}
 ```
 
-Tehat **nem** igy:
+Mit csinal:
 
-```text
-/opt/gnosis/authapi/app/GnosisAuthServer/
-```
+* ez a MySQL kapcsolat
 
-hanem igy:
+Mit kell modositani:
 
-```text
-/opt/gnosis/authapi/app/GnosisAuthServer
-/opt/gnosis/authapi/app/appsettings.json
-/opt/gnosis/authapi/app/appsettings.Development.json
-/opt/gnosis/authapi/app/dotnet-tools.json
-```
-
-A `keys` mappat is itt kell letrehozni:
-
-```text
-/opt/gnosis/authapi/app/keys
-```
-
----
-
-## 9. Elso telepites lepesrol lepesre
-
-## 9.1 Mappak letrehozasa
-
-```bash
-sudo mkdir -p /opt/gnosis/authapi/app
-sudo mkdir -p /opt/gnosis/authapi/app/keys
-sudo mkdir -p /opt/gnosis/authapi/app/logs
-```
-
-## 9.2 A publisholt fajlok feltoltese
-
-A sajat gepeden publishold a projektet, majd a publish output **tartalmat** toltsd fel ide:
-
-```text
-/opt/gnosis/authapi/app
-```
+* adatbazis nev
+* user
+* jelszo
 
 Fontos:
 
-* nem a publish mappat mint almappat
-* hanem a publish mappaban levo fajlokat
+* productionben ne maradjon `CHANGE_ME`
+* ha helyi MySQL-t hasznalsz, a `127.0.0.1` teljesen jo
 
-A vegeredmeny legyen peldaul:
+---
 
-```text
-/opt/gnosis/authapi/app/GnosisAuthServer
-/opt/gnosis/authapi/app/GnosisAuthServer.pdb
-/opt/gnosis/authapi/app/appsettings.json
+## 7.3 `Jwt`
+
+Pelda:
+
+```json
+"Jwt": {
+  "PrivateKeyPemPath": "./keys/auth_private.pem",
+  "PublicKeyPemPath": "./keys/auth_public.pem",
+  "Issuer": "Gnosis.Auth",
+  "Audience": "Gnosis.Clients",
+  "AccessTokenMinutes": 20,
+  "KeyId": "gnosis-auth-main"
+}
 ```
 
-## 9.3 Futtathato jog ellenorzese
+Mit csinal:
 
-Ha Linuxon a binaris nem futtathato, add meg neki:
+* itt vannak a JWT RSA kulcsokra es a token metadata-ra vonatkozo beallitasok
 
-```bash
-chmod +x /opt/gnosis/authapi/app/GnosisAuthServer
-```
+Mit kell modositani:
 
-## 9.4 `bootstrap.sql` feltoltese
-
-A source kod teljes feltoltese **nem kell**, de az adatbazis schema miatt a `bootstrap.sql` fajlt fel kell tenni valahova.
-
-Javasolt hely:
-
-```text
-/opt/gnosis/authapi/bootstrap.sql
-```
-
-Tehat a sajat gepedrol a `Sql/bootstrap.sql` fajlt kulon told fel ide.
-
-## 9.5 MySQL adatbazis letrehozasa
-
-Lepj be MySQL-be:
-
-```bash
-sudo mysql
-```
-
-Majd futtasd:
-
-```sql
-CREATE DATABASE gnosis_auth CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-CREATE USER 'gnosis_auth'@'127.0.0.1' IDENTIFIED BY 'EROS_DB_JELSZO';
-GRANT ALL PRIVILEGES ON gnosis_auth.* TO 'gnosis_auth'@'127.0.0.1';
-
-CREATE USER 'gnosis_auth'@'localhost' IDENTIFIED BY 'EROS_DB_JELSZO';
-GRANT ALL PRIVILEGES ON gnosis_auth.* TO 'gnosis_auth'@'localhost';
-
-FLUSH PRIVILEGES;
-EXIT;
-```
-
-**Mi tortenik itt?**
-
-* letrejon az adatbazis
-* letrejon a DB user
-* megkapja a jogokat
-* kulon letrehozzuk `127.0.0.1`-re es `localhost`-ra is, hogy ne legyen csatlakozasi problema
-
-## 9.6 A bootstrap SQL lefuttatasa
+* a kulcsok pathja, ha nem a default helyen vannak
+* `Issuer` es `Audience` csak akkor, ha a teljes auth modellt attervezed
+* `AccessTokenMinutes`, ha mas session hosszt akarsz
 
 Fontos:
-mivel te nem hasznalsz `src` mappat, ez **nem** lesz jo:
 
-```bash
-mysql -u gnosis_auth -p gnosis_auth < /opt/gnosis/authapi/src/...
+* ha a PEM fajlok nem leteznek, az alkalmazas indulaskor exceptiont dob
+
+---
+
+## 7.4 `Steam`
+
+Pelda:
+
+```json
+"Steam": {
+  "Enabled": true,
+  "AppId": 0,
+  "PublisherKey": "CHANGE_ME",
+  "AllowMockTicketsInDevelopment": false
+}
 ```
 
-A helyes parancs nalad ez:
+Mit csinal:
 
-```bash
-mysql -h 127.0.0.1 -u gnosis_auth -p gnosis_auth < /opt/gnosis/authapi/bootstrap.sql
+* a Steam ticket validacio beallitasai
+
+Mit kell modositani:
+
+* `AppId`
+* `PublisherKey`
+
+Megjegyzes:
+
+* development modban lehet bypass, de productionben ez maradjon kikapcsolva
+
+---
+
+## 7.5 `RealmRegistry`
+
+Pelda:
+
+```json
+"RealmRegistry": {
+  "HeartbeatTimeoutSeconds": 90,
+  "HideUnhealthyRealms": true
+}
 ```
 
-Amikor a jelszot irod, a terminal nem fog karaktereket mutatni. Ez normalis.
+Mit csinal:
 
-## 9.7 JWT RSA kulcsok letrehozasa
+* realm lathatosagi szabalyok
+* heartbeat timeout
 
-Az alkalmazas RSA kulcspaarat var PEM fajlokban. Ezeket neked kell letrehozni.
+Mit kell modositani:
+
+* ha mas heartbeat ritmussal dolgozol
+
+---
+
+## 7.6 `ServiceAuth`
+
+Pelda:
+
+```json
+"ServiceAuth": {
+  "Enabled": true,
+  "AllowedClockSkewSeconds": 30,
+  "NonceTtlSeconds": 90,
+  "Clients": [
+    {
+      "ServiceId": "official-eu-realm-core",
+      "Secret": "CHANGE_ME_REALMCORE_SHARED_SECRET",
+      "Roles": [ "official-realm-heartbeat.write", "realm-gamedata.read" ],
+      "AllowedRealmIds": [ "official-eu-1" ]
+    }
+  ]
+}
+```
+
+Mit csinal:
+
+* internal service-to-service auth
+* HMAC alapu hitelesites
+* nonce alapu replay vedelem
+
+Mit kell modositani:
+
+* `ServiceId`
+* `Secret`
+* `Roles`
+* `AllowedRealmIds`
+
+Fontos:
+
+* a RealmCore schema sync-hez a szolgaltatasnak kelleni fog a `realm-schema.read` role is
+* ezt productionben add hozza annal a service identity-nel, amelyik a schema endpointokat hivja
+
+Javasolt pelda:
+
+```json
+"Roles": [
+  "official-realm-heartbeat.write",
+  "realm-gamedata.read",
+  "realm-schema.read"
+]
+```
+
+---
+
+## 7.7 `Admin`
+
+Pelda:
+
+```json
+"Admin": {
+  "Enabled": true,
+  "HeaderName": "X-Gnosis-Admin-Key",
+  "ApiKey": "CHANGE_ME_ADMIN_KEY",
+  "AllowedIpAddresses": [ "127.0.0.1" ]
+}
+```
+
+Mit csinal:
+
+* admin endpointok vedelme
+
+Mit kell modositani:
+
+* `ApiKey`
+* `AllowedIpAddresses`
+
+Javaslat:
+
+* az admin API csak localhostrol vagy fix admin IP-rol legyen elerheto
+
+---
+
+## 7.8 `Security`
+
+Pelda:
+
+```json
+"Security": {
+  "RequireHttps": true,
+  "KnownProxies": [ "127.0.0.1" ]
+}
+```
+
+Mit csinal:
+
+* HTTPS policy
+* megbizhato proxyk
+
+Mit kell modositani:
+
+* ha az Nginx ugyanazon a gepen fut, a `127.0.0.1` jo
+* ha kulon proxy gep lesz, annak az IP-je kell ide
+
+---
+
+## 7.9 `Cors`
+
+Pelda:
+
+```json
+"Cors": {
+  "AllowedOrigins": []
+}
+```
+
+Mit csinal:
+
+* bongeszo alapu eleresek CORS policy-ja
+
+Megjegyzes:
+
+* ha ures, a kod fallback origin-t allit be
+* Unity kliensnel a CORS tipikusan kevesbe fontos, de ha lesz webes admin vagy launcher frontend, itt kell megadni az origin-eket
+
+---
+
+## 7.10 `SchemaDelivery`
+
+Pelda:
+
+```json
+"SchemaDelivery": {
+  "Enabled": true,
+  "DirectoryPath": "SchemaMigrations/realmcore",
+  "Channel": "realmcore"
+}
+```
+
+Mit csinal:
+
+* megmondja, honnan olvassa az Auth API a migration fajlokat
+* ez a schema manifest es migration content endpoint forrasa
+
+Mit kell modositani:
+
+* ha nem az alap mappaban akarod tarolni a migrationokat
+* ha kesobb kulon csatornat vezetsz be
+
+Fontos:
+
+* ez jelenleg **mappa alapon mukodik**
+* nem kell minden migrationhoz uj kodot irni
+* eleg az uj `*.mysql` fajlt a megfelelo mappaba rakni
+
+Ha relativ path:
+
+* a mappa a publisholt alkalmazas `ContentRootPath`-jahoz kepest lesz ertelmezve
+
+Tehat productionben a default path jellemzoen ezt jelenti:
+
+```text
+/opt/gnosis/authapi/app/SchemaMigrations/realmcore
+```
+
+---
+
+## 8. JWT RSA kulcsok
+
+Ez a projekt RSA kulcspaar alapjan ir ala JWT tokeneket.
+
+A fajlok:
+
+```text
+/opt/gnosis/authapi/app/keys/auth_private.pem
+/opt/gnosis/authapi/app/keys/auth_public.pem
+```
+
+A `FileRsaKeyProvider` ezeket tolti be indulaskor.
+
+Ha a fajlok nem leteznek, az alkalmazas nem indul el.
+
+Pelda letrehozas:
 
 ```bash
 mkdir -p /opt/gnosis/authapi/app/keys
@@ -418,293 +773,99 @@ chmod 600 /opt/gnosis/authapi/app/keys/auth_private.pem
 chmod 644 /opt/gnosis/authapi/app/keys/auth_public.pem
 ```
 
-Ha ezek nem leteznek, az alkalmazas nem fog elindulni.
-
 ---
 
-## 10. `appsettings.Production.json` letrehozasa
+## 9. Elso telepites Ubuntu VPS-en
 
-A `Production` konfiguraciot itt kell letrehozni:
+Ez a README abból indul ki, hogy:
+
+* a publish outputot a sajat gepedrol toltesz fel
+* a source kodot nem telepited a szerverre
+* az AuthApi `app` mappaba kerul
+
+## 9.1 Mappak letrehozasa
+
+```bash
+sudo mkdir -p /opt/gnosis/authapi/app
+sudo mkdir -p /opt/gnosis/authapi/app/keys
+sudo mkdir -p /opt/gnosis/authapi/app/logs
+sudo mkdir -p /opt/gnosis/authapi/app/SchemaMigrations/realmcore
+```
+
+## 9.2 Publish output feltoltese
+
+A Visual Studio publish output **tartalmat** toltsd fel ide:
+
+```text
+/opt/gnosis/authapi/app
+```
+
+Nem a publish mappat mint almappat, hanem a publish mappa belso fajljait.
+
+## 9.3 Futtathato jog
+
+Ha kell:
+
+```bash
+chmod +x /opt/gnosis/authapi/app/GnosisAuthServer
+```
+
+## 9.4 MySQL adatbazis letrehozasa
+
+A `bootstrap.sql` fajlt kulon toltsd fel peldaul ide:
+
+```text
+/opt/gnosis/authapi/bootstrap.sql
+```
+
+Majd hozd letre az adatbazist es a usert MySQL-ben, utana futtasd le a schema-t.
+
+## 9.5 appsettings.Production.json
+
+Hozd letre itt:
 
 ```text
 /opt/gnosis/authapi/app/appsettings.Production.json
 ```
 
-### Fontos
+Es production ertekekkel ird felul a default configot.
 
-A JSON szabvany **nem tamogat kommenteket**.
-Ezert az alabbi pelda **magyarazo jellegu**. A `//` kezdetu sorokat hasznalhatod mintanak, de ha tenyleges JSON fajlt hozol letre, akkor a kommenteket torolni kell.
+## 9.6 JWT kulcsok letrehozasa
 
-Az alabbi pelda azt mutatja, hogy **melyik sort mikor es mire kell modositani**.
+Generalj RSA PEM kulcsokat az elozo fejezet szerint.
 
-```json
-{
-  "Urls": "http://127.0.0.1:5158",
-  "Database": {
-    "ConnectionString": "Server=127.0.0.1;Port=3306;Database=gnosis_auth;User=gnosis_auth;Password=EROS_DB_JELSZO;SslMode=Preferred;"
-  },
-  "Jwt": {
-    "PrivateKeyPemPath": "/opt/gnosis/authapi/app/keys/auth_private.pem",
-    "PublicKeyPemPath": "/opt/gnosis/authapi/app/keys/auth_public.pem",
-    "Issuer": "Gnosis.Auth",
-    "Audience": "Gnosis.Clients",
-    "AccessTokenMinutes": 20,
-    "KeyId": "gnosis-auth-main"
-  },
-  "Steam": {
-    "Enabled": true,
-    "AppId": 123456,
-    "PublisherKey": "STEAM_PUBLISHER_KEY",
-    "AllowMockTicketsInDevelopment": false
-  },
-  "RealmRegistry": {
-    "HeartbeatTimeoutSeconds": 90,
-    "HideUnhealthyRealms": true
-  },
-  "ServiceAuth": {
-    "Enabled": true,
-    "AllowedClockSkewSeconds": 30,
-    "NonceTtlSeconds": 90,
-    "Clients": [
-      {
-        "ServiceId": "official-eu-realm-core",
-        "Secret": "EROS_REALMCORE_SECRET",
-        "Roles": [ "official-realm-heartbeat.write", "realm-gamedata.read" ],
-        "AllowedRealmIds": [ "official-eu-1" ]
-      }
-    ]
-  },
-  "Admin": {
-    "Enabled": true,
-    "HeaderName": "X-Gnosis-Admin-Key",
-    "ApiKey": "EROS_ADMIN_KULCS",
-    "AllowedIpAddresses": [ "127.0.0.1" ]
-  },
-  "Security": {
-    "RequireHttps": false,
-    "KnownProxies": [ "127.0.0.1" ]
-  },
-  "Cors": {
-    "AllowedOrigins": [ "https://auth.pelda.hu" ]
-  }
-}
-```
+## 9.7 Kezi inditas
 
-### Melyik sort mire kell modositani?
-
-#### `"Urls": "http://127.0.0.1:5158"`
-
-Ez azt mondja meg, hogy az Auth API hol hallgasson.
-
-Mit allits be?
-
-* egy szerveres uzemben jo a `127.0.0.1:5158`
-* ez azt jelenti, hogy csak helyben erheto el
-* a publikus forgalmat majd az Nginx tovabbitja ide
-
-Mikor kell modositani?
-
-* csak akkor, ha masik portot akarsz hasznalni
-
-#### `"ConnectionString"`
-
-Ez az adatbazis kapcsolat.
-
-Mit allits be?
-
-* a sajat adatbazis nevedet
-* a sajat DB usert
-* a sajat DB jelszot
-
-Mikor kell modositani?
-
-* mindig, mert ez szerverfuggo
-
-#### `"PrivateKeyPemPath"` es `"PublicKeyPemPath"`
-
-Ez a JWT RSA kulcsok helye.
-
-Mit allits be?
-
-* pontosan oda mutasson, ahova a PEM fajlokat letrehoztad
-
-Mikor kell modositani?
-
-* ha nem az alap `/opt/gnosis/authapi/app/keys/` utvonalat hasznalod
-
-#### `"Issuer"`
-
-A token kibocsato neve.
-
-Mit allits be?
-
-* maradhat `Gnosis.Auth`
-
-Mikor kell modositani?
-
-* csak ha kesobb tobb auth providered lenne
-
-#### `"Audience"`
-
-A token celkozonsege.
-
-Mit allits be?
-
-* maradhat `Gnosis.Clients`
-
-Mikor kell modositani?
-
-* ha a token ellenorzo oldalon mas ertekre epitesz
-
-#### `"AccessTokenMinutes": 20`
-
-A jatekos access token elettartama percben.
-
-Mit allits be?
-
-* kezdesnek a `20` jo
-
-Mikor kell modositani?
-
-* ha rovidebb vagy hosszabb sessiont akarsz
-
-#### `"KeyId"`
-
-Kulcsazonosito.
-
-Mit allits be?
-
-* maradhat `gnosis-auth-main`
-
-Mikor kell modositani?
-
-* kulcsrotacio esetben
-
-#### `"Steam": { ... }`
-
-A Steam auth beallitasai.
-
-Mit allits be?
-
-* `Enabled`: `true`, ha tenyleg Steam authot akarsz
-* `AppId`: a sajat Steam AppId
-* `PublisherKey`: a sajat Steam web API/publisher key
-* `AllowMockTicketsInDevelopment`: productionben `false`
-
-Mikor kell modositani?
-
-* mindig, amikor valos Steam loginra allsz at
-
-#### `"HeartbeatTimeoutSeconds": 90`
-
-Mennyi ido utan tekintsuk a realm-et lejartnak, ha nem jon uj heartbeat.
-
-Mit allits be?
-
-* `90` jo kezdesnek
-
-Mikor kell modositani?
-
-* ha mas heartbeat periodust hasznalsz
-
-#### `"ServiceAuth"`
-
-A belso szolgaltatasok hitelesitese.
-
-Mit allits be?
-
-* a RealmCore service ID-jat
-* a sajat eros shared secretet
-* a szerepkoroket
-* az engedelyezett realm ID-kat
-
-Mikor kell modositani?
-
-* amikor meglesz a RealmCore konkret service identity-je
-
-#### `"Admin"`
-
-Az admin endpointok vedelme.
-
-Mit allits be?
-
-* egy eros admin API kulcsot
-* a helyes header nevet
-* az engedelyezett IP-ket
-
-Mikor kell modositani?
-
-* mindig production elott
-
-#### `"RequireHttps": false`
-
-Ez csak az **elso boothoz** legyen ideiglenesen `false`.
-
-Mit allits be?
-
-* elso tesztnel `false`
-* miutan Nginx HTTPS megy, `true`
-
-#### `"KnownProxies": [ "127.0.0.1" ]`
-
-Melyik reverse proxy megbizhato.
-
-Mit allits be?
-
-* ha az Nginx ugyanazon a gepen fut, jo a `127.0.0.1`
-* ha kulon gepen lenne, akkor annak az IP-je
-
-#### `"AllowedOrigins"`
-
-Bongeszos kliensekhez CORS lista.
-
-Mit allits be?
-
-* ha nincs bongeszos frontend, lehet minimalis
-* ha van admin frontend vagy launcher web oldal, akkor annak a domainjet
-
----
-
-## 11. Kezi inditas teszthez
-
-Mivel nalad nem `.dll`, hanem futtathato binaris van, a helyes inditas:
+A jelenlegi publish formatumodnal a helyes inditas:
 
 ```bash
 cd /opt/gnosis/authapi/app
 ASPNETCORE_ENVIRONMENT=Production ./GnosisAuthServer
 ```
 
-Ha ez jo, a masik terminalban tesztelheto:
+## 9.8 Ellenorzes
+
+Peldaul:
 
 ```bash
 curl http://127.0.0.1:5158/health/live
 curl http://127.0.0.1:5158/health/ready
 ```
 
-Ha nem indul, nezd meg:
+Ha Nginx mogott mar megy:
 
-* megvannak-e a PEM fajlok
-* jo-e a DB connection string
-* lefutott-e a `bootstrap.sql`
+```bash
+curl https://auth.te-domainod.hu/health/live
+curl https://auth.te-domainod.hu/health/ready
+```
 
 ---
 
-## 12. systemd service letrehozasa
+## 10. systemd service
 
-Hozz letre kulon rendszerfelhasznalot:
+Javasolt `systemd` service.
 
-```bash
-sudo useradd --system --home /opt/gnosis/authapi --shell /usr/sbin/nologin gnosisauth
-sudo chown -R gnosisauth:gnosisauth /opt/gnosis/authapi
-```
-
-Service file:
-
-```bash
-sudo nano /etc/systemd/system/gnosis-authapi.service
-```
-
-Tartalom:
+Pelda:
 
 ```ini
 [Unit]
@@ -725,43 +886,26 @@ SyslogIdentifier=gnosis-authapi
 WantedBy=multi-user.target
 ```
 
-Aktivalas:
+Fontos:
 
-```bash
-sudo systemctl daemon-reload
-sudo systemctl enable gnosis-authapi
-sudo systemctl start gnosis-authapi
-sudo systemctl status gnosis-authapi
-```
-
-Logok:
-
-```bash
-journalctl -u gnosis-authapi -f
-```
+* a binary kozvetlenul fut
+* nem `dotnet ...dll`
 
 ---
 
-## 13. Nginx reverse proxy beallitasa
+## 11. Nginx reverse proxy
 
-A javasolt topologia:
+Javasolt topologia:
 
-* az Auth API csak helyben fusson
-* az Nginx fogadja a publikus kero forgalmat
-* az Nginx tovabbitson `127.0.0.1:5158`-ra
+* Auth API csak `127.0.0.1:5158`
+* Nginx fogadja a publikus 80/443 forgalmat
+* Nginx tovabbit a helyi Auth API fele
 
-Site file:
-
-```bash
-sudo nano /etc/nginx/sites-available/gnosis-authapi
-```
-
-Pelda:
+Pelda auth host:
 
 ```nginx
 server {
-    listen 80;
-    server_name auth.pelda.hu;
+    server_name auth.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:5158;
@@ -771,114 +915,173 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
     }
-}
-```
 
-Aktivalas:
-
-```bash
-sudo ln -s /etc/nginx/sites-available/gnosis-authapi /etc/nginx/sites-enabled/
-sudo nginx -t
-sudo systemctl reload nginx
-```
-
-Miutan a HTTPS be van allitva, vissza kell allitani:
-
-```json
-"Security": {
-  "RequireHttps": true,
-  "KnownProxies": [ "127.0.0.1" ]
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/auth.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/auth.example.com/privkey.pem;
 }
 ```
 
 ---
 
-## 14. Hibas inditas leggyakoribb okai
+## 12. Rate limiting
+
+A kod alapjan a projekt rate limitinget hasznal.
+
+A jelenlegi policy-k:
+
+* `login`
+* `realm-list`
+* `official-heartbeat`
+* `realm-gamedata-read`
+* `admin-write`
+
+Ez fontos vedelmi reteg brute-force, flood vagy hibas belso integracio ellen.
+
+---
+
+## 13. Security modell roviden
+
+A jelenlegi AuthApi security modellje:
+
+* Steam ticket validacio public login endpointnal
+* RSA alapu JWT token kiadas
+* internal HMAC service auth
+* nonce alapu replay vedelem
+* admin header + IP whitelist
+* rate limiting
+* loopback bind javasolt
+* reverse proxy mogotti uzem
+* health endpointok kulon
+* MySQL kapcsolat kotelezo
+
+Fontos:
+
+* a `CHANGE_ME` placeholder ertekeket production elott mindig cserelni kell
+* a private key soha ne keruljon repoba
+* a service secret-ek ne maradjanak defaulton
+* az admin API kulcs legyen eros
+* a schema migration endpoint maradjon internal
+
+---
+
+## 14. Schema delivery mukodes
+
+A jelenlegi schema delivery modell:
+
+1. az AuthApi figyeli a `SchemaMigrations/realmcore` mappat
+2. beolvassa a `*.mysql` fajlokat
+3. checksumot szamol rajuk
+4. a manifest endpoint visszaadja a migration listat
+5. a migration endpoint visszaadja az egyes migrationok tartalmat
+6. a RealmCore ezt hasznalja a sajat DB schema frissitesehez
+
+Ez azt jelenti, hogy uj migrationhoz eleg:
+
+* uj `*.mysql` fajlt letrehozni a megfelelo mappaban
+* nem kell hozza uj endpointot irni
+* nem kell a kodban uj migration class
+
+### Fontos naming szabaly
+
+Javasolt fajlnev:
+
+```text
+0001_initial_schema.mysql
+0002_add_zone_tables.mysql
+0003_drop_old_column.destructive.mysql
+```
+
+A destructive migrationokat a kod fajlnev alapjan ismeri fel.
+
+---
+
+## 15. Leggyakoribb hibak
 
 ### `JWT private key file was not found`
 
-Ok:
+Oka:
 
-* nincs privat PEM fajl
-* rossz utvonal van a configban
-
-Megoldas:
-
-* generald le a kulcsokat
-* abszolut pathot hasznalj
+* nincs PEM fajl
+* rossz path van a configban
 
 ### `Access denied for user ...`
 
-Ok:
+Oka:
 
 * rossz MySQL user
-* rossz host
-* nincs `localhost` es `127.0.0.1` kulon kezelve
+* rossz jelszo
+* `localhost` vs `127.0.0.1` eltérés
 
-Megoldas:
+### `Address already in use`
 
-* hozd letre mindket user host variaciot
-* hasznald a `-h 127.0.0.1` kapcsolot
+Oka:
 
-### `ready` health check hibas
+* a portot mar fogja egy masik process vagy systemd service
 
-Ok:
+### `401` internal endpointon
 
-* nincs schema
-* rossz DB kapcsolat
-* nincs futo MySQL
+Oka:
 
-### `502 Bad Gateway`
+* hianyzik a service auth header
+* rossz HMAC secret
+* rossz timestamp / nonce
+* nincs megfelelo role
 
-Ok:
+### `403` internal endpointon
 
-* az app nem fut
-* rossz a port
-* rossz az Nginx proxy beallitas
+Oka:
 
-### App el sem indul systemd alatt
+* a service identity be van engedve, de nincs meg a szukseges role
 
-Ok:
+### `ready` health check nem jo
 
-* nincs `chmod +x`
-* rossz `ExecStart`
-* a binaris nincs az `app` mappaban
+Oka:
 
----
-
-## 15. Mit nem kell telepiteni?
-
-A kovetkezok **nem kotelezoek** a szerverre:
-
-* teljes source kod
-* `/opt/gnosis/authapi/src`
-* Visual Studio
-* `dotnet publish` szerver oldali futtatasa
-
-Ha Windows gepen publisholsz es feltoltod a publish outputot, akkor a VPS-en eleg:
-
-* `app/`
-* `bootstrap.sql`
-* `keys/`
-* `appsettings.Production.json`
+* nincs adatbazis kapcsolat
+* nincs lefuttatva a bootstrap schema
+* hibas DB connection string
 
 ---
 
-## 16. Gyors osszefoglalo
+## 16. Production checklist
 
-A helyes telepitesi sorrend:
+Telepites elott:
 
-1. letrehozod az `app` mappat
-2. feltoltod a publisholt fajlokat az `app` mappaba
-3. futtathato jogot adsz a `GnosisAuthServer` binarisnak
-4. feltoltod kulon a `bootstrap.sql` fajlt
-5. letrehozod a MySQL adatbazist es usereket
-6. lefuttatod a bootstrap SQL-t
-7. legeneralod az RSA PEM kulcsokat
-8. letrehozod az `appsettings.Production.json` fajlt
-9. kezileg kiprobalod a binarist
-10. systemd service-be rakod
-11. Nginx moge teszed
-12. HTTPS utan `RequireHttps=true`
+* csereld a `CHANGE_ME` ertekeket
+* generalj RSA kulcspárt
+* allitsd be a valos Steam AppId es PublisherKey ertekeket
+* allitsd be a valos admin API kulcsot
+* add hozza a helyes service role-okat
+* ellenorizd a `SchemaDelivery` mappat es fajlneveket
+* tedd az AuthApi-t Nginx moge
+* engedelyezd a systemd service-t
+* teszteld a `live` es `ready` endpointot
 
-Ez a helyes modell a te jelenlegi publish formatumodhoz, ahol az output egy futtathato `GnosisAuthServer` fajlt tartalmaz, es **nem** `.dll` alapu inditas tortenik.
+---
+
+## 17. Gyors osszefoglalo
+
+A `GnosisAuthServer` jelenlegi allapotaban:
+
+* kezeli a public Steam login flow-t
+* RSA JWT-t ad ki
+* listazza a realmeket
+* fogadja az official heartbeatet
+* tarolja a canonical GameData-t
+* admin endpointokat ad
+* internal schema manifestet es migration tartalmat ad a RealmCore-nak
+* systemd + Nginx mogotti Linuxos uzemre van tervezve
+
+A projekt telepitesenek lenyege:
+
+1. publish output feltoltese az `app` mappaba
+2. MySQL adatbazis letrehozasa
+3. bootstrap schema lefuttatasa
+4. RSA kulcsok generalasa
+5. `appsettings.Production.json` beallitasa
+6. binary inditas vagy systemd service
+7. Nginx reverse proxy
+8. health endpoint ellenorzes
+
+Ez a README csak a **GnosisAuthServer** projektre vonatkozik.

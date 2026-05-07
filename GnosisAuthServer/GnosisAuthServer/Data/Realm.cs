@@ -28,7 +28,7 @@ public sealed class Realm
     [Required]
     [MaxLength(16)]
     [Column("kind")]
-    public string Kind { get; set; } = "official";
+    public string Kind { get; set; } = "realmcore";
 
     [Required]
     [MaxLength(16)]
@@ -56,11 +56,30 @@ public sealed class Realm
     public bool IsOfficial { get; set; } = true;
 
     [Column("last_heartbeat_at")]
-    public DateTime? LastHeartbeatAtUtc { get; set; }
+    public DateTime? LastHeartbeatAt { get; set; }
 
     [Column("created_at")]
-    public DateTime CreatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime CreatedAt { get; set; }
 
     [Column("updated_at")]
-    public DateTime UpdatedAtUtc { get; set; } = DateTime.UtcNow;
+    public DateTime UpdatedAt { get; set; }
+
+    [Required]
+    [MaxLength(32)]
+    [Column("realm_type")]
+    public string RealmType { get; set; } = "official";
+
+    [MaxLength(256)]
+    [Column("motd")]
+    public string? Motd { get; set; }
+
+    [MaxLength(64)]
+    [Column("version")]
+    public string? Version { get; set; }
+
+    [Column("modded")]
+    public bool Modded { get; set; }
+
+    [Column("enabled")]
+    public bool Enabled { get; set; } = true;
 }

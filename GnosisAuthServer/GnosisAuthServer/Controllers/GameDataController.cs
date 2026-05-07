@@ -7,21 +7,14 @@ using Microsoft.AspNetCore.RateLimiting;
 namespace GnosisAuthServer.Controllers;
 
 [ApiController]
-public sealed class GameDataController : ControllerBase
+public sealed class GameDataController(
+    IServiceRequestAuthenticator serviceRequestAuthenticator,
+    IAdminRequestValidator adminRequestValidator,
+    IGameDataService gameDataService) : ControllerBase
 {
-    private readonly IServiceRequestAuthenticator _serviceRequestAuthenticator;
-    private readonly IAdminRequestValidator _adminRequestValidator;
-    private readonly IGameDataService _gameDataService;
-
-    public GameDataController(
-        IServiceRequestAuthenticator serviceRequestAuthenticator,
-        IAdminRequestValidator adminRequestValidator,
-        IGameDataService gameDataService)
-    {
-        _serviceRequestAuthenticator = serviceRequestAuthenticator;
-        _adminRequestValidator = adminRequestValidator;
-        _gameDataService = gameDataService;
-    }
+    private readonly IServiceRequestAuthenticator _serviceRequestAuthenticator = serviceRequestAuthenticator;
+    private readonly IAdminRequestValidator _adminRequestValidator = adminRequestValidator;
+    private readonly IGameDataService _gameDataService = gameDataService;
 
     [HttpGet("api/gamedata/version")]
     [HttpGet("api/internal/gamedata/version")]

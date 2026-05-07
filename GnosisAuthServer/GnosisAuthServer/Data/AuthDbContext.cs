@@ -2,12 +2,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace GnosisAuthServer.Data;
 
-public sealed class AuthDbContext : DbContext
+public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbContext(options)
 {
-    public AuthDbContext(DbContextOptions<AuthDbContext> options) : base(options)
-    {
-    }
-
     public DbSet<Account> Accounts => Set<Account>();
     public DbSet<Realm> Realms => Set<Realm>();
     public DbSet<DbItem> GameItems => Set<DbItem>();
@@ -28,7 +24,7 @@ public sealed class AuthDbContext : DbContext
             .IsUnique();
 
         modelBuilder.Entity<Realm>()
-            .HasIndex(x => new { x.IsListed, x.Status, x.LastHeartbeatAtUtc });
+            .HasIndex(x => new { x.IsListed, x.Status, x.LastHeartbeatAt });
 
         modelBuilder.Entity<DbItem>().HasIndex(x => x.AssetId).IsUnique();
         modelBuilder.Entity<DbEntity>().HasIndex(x => x.AssetId).IsUnique();

@@ -2,49 +2,202 @@
 
 ## 1. Mi ez a projekt?
 
-A `GnosisRealmCore` a Gnosis Online realm-szintu backend API-ja. Ez a szolgaltatas kezeli az adott realmhez tartozo tartos adatokat, a karaktereket, a realm szintu zone es node allapotot, valamint a globalis AuthApi-bol lehuzott canonical GameData realm-specifikus osszefesuleset.
+A `GnosisRealmCore` a Gnosis Online rendszer realm szintu backend szolgaltatasa.
 
-Ez a projekt community-friendly szemlelettel keszult. Ugy lett tervezve, hogy:
-- official realmkent is futhasson,
-- community realmkent is telepitheto legyen,
-- egyetlen VPS-en vagy tobb szerveren is mukodhessen,
-- ne igenyelje a source kod szerverre telepiteset,
-- a schema frissitesek automatikusan telepuljenek inditaskor.
+Ez a projekt a kovetkezokert felel:
 
-## 2. Fobb felelossegi korok
+* karakter adatok kezeles
+* realm szintu adatbazis muveletek
+* zone lookup es zone inditas logika
+* node allapot es zone allapot nyilvantartas
+* global GameData lekerese az AuthApi-bol
+* global GameData cache es kesobbi realm override merge alap
+* official realm heartbeat kuldese az AuthApi fele
+* schema migration futtatasa a sajat realm adatbazison
+* kesobbi community realm tamogatas alapjainak biztositasa
 
-A RealmCore a kovetkezo dolgokat vegzi:
+A RealmCore **nem** global auth szerver, es **nem** maga a jatekszerver.
 
-- karakterek listazasa, letrehozasa, torlese
-- karakter teljes save/load
-- zone lookup es zone startup orchestration
-- node registry es node parancsqueue
-- zone heartbeat fogadas
-- globalis GameData lehuzasa az AuthApi-bol
-- realm override-ok merge-elese memoriaba
-- official realm heartbeat kuldese az AuthApi fele
+A rendszerben a szerepek logikailag igy neznek ki:
 
-## 3. Miert jo ez official es community realmhez is?
+* **GnosisAuthServer**
 
-A rendszer ugyanazzal a kodbazissal tamogatja a ket modot.
+  * global auth
+  * canonical GameData
+  * schema manifest es migration content source
+  * realm lista
+* **GnosisRealmCore**
+
+  * realm adatkezeles
+  * save/load
+  * zone es node orchestration alap
+  * global GameData cache
+  * remote schema migration vegrehajtas
+* **Gnosis Node Agent**
+
+  * zone processzek inditasa es felugyelete
+* **Game Server**
+
+  * konkret runtime gameplay
+
+A RealmCore a sajat MySQL adatbazisat kezeli.
+A schema valtozasokat **nem helyi SQL fajlokbol** olvassa, hanem az AuthApi-bol keri le, majd a **sajat adatbazisara** hajtja vegre.
+
+Ez nagyon fontos.
+
+---
+
+## 2. Mit csinal a RealmCore?
+
+A RealmCore a realm "agya".
+
+Feladatai:
+
+### 2.1 Save/load
+
+A RealmCore tarolja es betolti a realmhez tartozo adatokat, peldaul:
+
+* karakterek
+* inventory
+* quest allapot
+* guild vagy kesobbi social adatok
+* zone utolso helye
+* egyeb realm-specifikus progresszio
+
+### 2.2 Zone lookup es inditas
+
+Ha egy kliens vagy egy szerver egy adott zonat akar elerni, a RealmCore:
+
+* megnezi, fut-e mar a zona
+* ha fut, visszaadja az IP/port adatokat
+* ha nem fut, sorba allit egy node commandot, hogy a NodeAgent inditsa el
+
+### 2.3 Node es zone allapot
+
+A RealmCore nyilvantartja:
+
+* mely node online
+* mely zona fut
+* melyik node-on fut
+* mikor jott utolso heartbeat
+
+### 2.4 Global GameData cache
+
+A RealmCore az AuthApi-bol lekerni a globalis GameData-t, es memoriaban tarolja.
+
+Ez a kesobbi modell alapja:
+
+* AuthApi = canonical source
+* RealmCore = cache + merge pont
+* GameServer = a RealmCore-tol kapja a vegleges adatot
+
+### 2.5 Remote schema migration
+
+A RealmCore indulaskor:
+
+* lekerni az AuthApi-bol a schema manifestet
+* megnezni, mi futott mar le a sajat DB-jeben
+* letolteni a hianyzo migrationokat
+* checksumot ellenorizni
+* lefuttatni oket a sajat realm adatbazisan
+* eltárolni, hogy mi futott mar le
+
+### 2.6 Heartbeat az AuthApi fele
+
+Official realm modban a RealmCore periodikusan heartbeatet kuld az AuthApi-nak, hogy:
+
+* a realm latszodjon online-nak
+* frissuljon a realm status
+* frissuljon a jatekos letszam
+* frissuljon a healthy zone szam
+
+---
+
+## 3. High-level mukodesi elv
+
+A RealmCore a kovetkezo kapcsolatokkal dolgozik.
+
+### 3.1 RealmCore -> AuthApi
+
+A RealmCore innen ker le:
+
+* global GameData version
+* global GameData snapshot
+* schema manifest
+* migration tartalom
+
+Es ide kuld:
+
+* official heartbeat
+
+### 3.2 NodeAgent -> RealmCore
+
+A NodeAgent a RealmCore-val beszel:
+
+* node heartbeat
+* zone heartbeat
+* command polling vagy command execute flow
+* zone status frissites
+
+### 3.3 GameServer -> RealmCore
+
+A GameServer a RealmCore-hoz fordul:
+
+* karakter adatert
+* save muveletekert
+* zone adatokert
+* GameData snapshotert vagy kesobbi merged snapshotert
+
+### 3.4 Admin / toolok -> RealmCore
+
+A RealmCore kesobb admin vagy belso toolok fele is biztosithat endpointokat:
+
+* karakter admin
+* zone status
+* node status
+* override kezeles
+* community realm konfiguracio
+
+---
+
+## 4. Community-friendly mukodes
+
+A RealmCore ugy lett tervezve, hogy official es community realmhez is jo alap legyen.
+
+A fo kulonbseg:
 
 ### Official realm
-- globalis AuthApihoz kapcsolodik
-- megjelenik a realm listaban
-- hivatalos heartbeatet kuld
-- canonical GameData-t hasznal
+
+* AuthApi heartbeat bekapcsolva
+* official realm lista integration
+* kozponti canonical GameData hasznalat
+* kozpontilag kiosztott schema migration
+* szigorubb security policy
 
 ### Community realm
-- sajat realm ID-val es sajat adatbazissal fut
-- sajat override-okkal dolgozik
-- ugyanaz a telepitesi modell
-- kesobb sajat content pipeline-hoz is bovitheto
 
-## 4. Publish output alapjan telepites
+* ugyanaz a RealmCore futtathato
+* sajat realm adatbazissal
+* sajat configgal
+* sajat override-okkal
+* kesobb sajat custom item/entity definiciokkal
+* de ugyanazt a migration es GameData alapmodellt hasznalhatja
 
-Ez a README abból indul ki, hogy a projektet Visual Studio-ból publisholod, es a publish outputot toltod fel a szerverre. A source kod szerverre telepitese nem szukseges.
+A rendszer celja, hogy ugyanaz a szoftver tudjon:
 
-Javasolt mappa:
+* official realmkent futni
+* single-box community realmkent futni
+* split deploymentben is futni
+
+---
+
+## 5. Fajl- es mappaszerkezet
+
+A telepiteshez **nem kell source kod**.
+
+A telepiteshez a publish output kell.
+
+Javasolt szerkezet:
 
 ```text
 /opt/gnosis/realmcore/
@@ -54,195 +207,642 @@ Javasolt mappa:
     appsettings.json
     appsettings.Development.json
     appsettings.Production.json
-    SchemaMigrations/
-    keys/
-      auth_public.pem
+    logs/
 ```
 
-## 5. Adatbazis es schema frissitesek
+A RealmCore jelenlegi publish formaja Linuxon jellemzoen egy kozvetlenul futtathato binaris:
 
-A RealmCore szandekosan nem `dotnet ef migrations` workflow-ra epul a szerveren, hanem sajat SQL migration runnerre. Ez community-friendly megoldas, mert:
+```text
+GnosisRealmCore
+```
 
-- nem kell source kod a szerverre
-- nem kell `dotnet ef` futtatasa a VPS-en
-- official es community realmeken ugyanaz az update mechanizmus fut
-- uj oszlop, uj tabla vagy akar torles is automatikusan kioszthato egy release-ben
-
-A schema frissitesek a publish output `SchemaMigrations` mappajaban vannak. Inditaskor a `SchemaMigrationService` vegigmegy ezeken, es a meg nem alkalmazott migrationok SQL-jeit lefuttatja.
-
-A migrationok allapota a `schema_migrations` tablaban tarolodik.
-
-### Fontos szabaly
-A migration fajlok sorrendje es tartalma release utan mar ne valtozzon. Uj modositas mindig uj SQL migration file legyen.
-
-Pelda:
-- `0001_initial_schema.sql`
-- `0002_add_realm_flags.sql`
-- `0003_destructive_drop_old_column.sql`
-
-Ha egy migration nevében benne van, hogy `destructive`, akkor az destruktivnak minosul. Ilyenkor a `SchemaMigrations:AllowDestructiveMigrations` szabaly dont.
-
-## 6. Elso inditas Ubuntu VPS-en
-
-### 6.1 Kotelezo csomagok
+Ez azt jelenti, hogy az inditas altalaban:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y nginx mysql-server openssl
+./GnosisRealmCore
 ```
 
-### 6.2 Mappak letrehozasa
+nem pedig `.dll`-es forma.
+
+---
+
+## 6. A projekt fo reszei
+
+## 6.1 `Program.cs`
+
+Az alkalmazas belepesi pontja.
+
+Feladata:
+
+* konfiguracio betoltese
+* adatbazis kapcsolat beallitasa
+* service-ek regisztralasa
+* forwarded headers beallitasa
+* CORS beallitasa
+* migration sync inditasa
+* GameData cache warm-up inditasa
+* controller pipeline inditasa
+
+## 6.2 `Data/RealmDbContext.cs`
+
+A realm adatbazis fo DbContext-je.
+
+Feladata:
+
+* tablák elerese
+* EF Core mapping
+* adatbazis muveletek
+
+## 6.3 `Services/AuthApiClient.cs`
+
+Az AuthApi-val valo kommunikacioert felel.
+
+Feladata:
+
+* global GameData version lekerese
+* global GameData snapshot lekerese
+* official heartbeat kuldese
+* schema manifest lekerese
+* migration tartalom lekerese
+
+## 6.4 `Services/SchemaMigrationService.cs`
+
+A remote schema migration vegrehajto.
+
+Feladata:
+
+* schema manifest lekerese AuthApi-bol
+* hianyzo migrationok meghatarozasa
+* migration checksum ellenorzes
+* migration SQL futtatasa a sajat realm DB-n
+* `schema_migrations` tabla karbantartasa
+
+Fontos:
+
+* nem helyi migration fajlokat olvas
+* az AuthApi a migration source
+
+## 6.5 `Services/GameDataCacheService.cs`
+
+A global GameData cache service.
+
+Feladata:
+
+* AuthApi-bol global GameData lehuzasa
+* memoriaban tarolas
+* kesobbi merge alap official/community realmhez
+
+## 6.6 `Services/ZoneOrchestrationService.cs`
+
+Zone lookup es start logika.
+
+Feladata:
+
+* megnezni, fut-e egy zona
+* ha fut, visszaadni az IP/portot
+* ha nem fut, commandot sorba allitani a node szamara
+* zone heartbeat alapjan allapotot frissiteni
+
+## 6.7 `Services/CharacterService.cs`
+
+Karakter adatok kezelesere szolgalo service.
+
+Feladata:
+
+* karakterek betoltese
+* karakterek mentese
+* karakterhoz kapcsolodo realm adatok kezelese
+
+## 6.8 `Infrastructure/HmacServiceRequestAuthenticator.cs`
+
+Service-to-service auth a belso endpointokhoz.
+
+Feladata:
+
+* HMAC alapu request hitelesites
+* nonce alapjan replay vedelem
+* service identity ellenorzes
+
+## 6.9 `Infrastructure/MemoryNonceStore.cs`
+
+Nonce tarolas replay vedelemhez.
+
+## 6.10 `Infrastructure/JwtTokenValidator.cs`
+
+A kliens altal hozott JWT access token ellenorzese.
+
+## 6.11 `Infrastructure/LegacyNodeApiKeyValidator.cs`
+
+Atmeneti vagy legacy node auth megoldas, ha a NodeAgent meg nem allt at teljes HMAC/service auth modellre.
+
+## 6.12 `Options/`
+
+A konfiguracios osztalyok.
+
+Fo fajlok:
+
+* `DatabaseOptions.cs`
+* `AuthApiOptions.cs`
+* `JwtValidationOptions.cs`
+* `ServiceAuthOptions.cs`
+* `LegacyNodeAuthOptions.cs`
+* `SecurityOptions.cs`
+* `CorsOptions.cs`
+* `RealmOptions.cs`
+* `SchemaMigrationOptions.cs`
+* `GameDataCacheOptions.cs`
+
+## 6.13 `Models/`
+
+Request/response modellek es schema/GameData contractok.
+
+Kulonosen fontos:
+
+* `SchemaContracts.cs`
+* zone response modellek
+* heartbeat request modellek
+* GameData response modellek
+
+## 6.14 `Controllers/`
+
+A konkret HTTP endpointok.
+
+A pontos controller nev a projekt aktualis allapotatol fuggoen valtozhat, de logikailag ezek a blokkok varhatok:
+
+* karakter endpointok
+* zone lookup endpointok
+* node heartbeat endpointok
+* zone heartbeat endpointok
+* health endpointok
+* esetleg GameData vagy admin endpointok
+
+---
+
+## 7. appsettings konfiguracio leirasa
+
+A projekt a kovetkezo forrasokbol olvas konfiguraciot:
+
+* `appsettings.json`
+* `appsettings.{Environment}.json`
+* `GNOSIS_REALM_` prefixu environment valtozok
+
+Productionben a legfontosabb fajl:
+
+```text
+/opt/gnosis/realmcore/app/appsettings.Production.json
+```
+
+---
+
+## 7.1 `Database`
+
+Pelda:
+
+```json
+"Database": {
+  "ConnectionString": "Server=127.0.0.1;Port=3306;Database=gnosis_realm01;User=gnosis_realm;Password=CHANGE_ME;SslMode=Preferred;"
+}
+```
+
+Mit csinal:
+
+* ez a RealmCore sajat MySQL kapcsolata
+
+Mit kell modositani:
+
+* adatbazis neve
+* user
+* jelszo
+* SSL policy
+
+Nagyon fontos:
+
+* a RealmCore sajat adatbazist hasznal
+* a migrationokat erre az adatbazisra futtatja le
+
+---
+
+## 7.2 `AuthApi`
+
+Pelda:
+
+```json
+"AuthApi": {
+  "BaseUrl": "https://auth.playgnosis.hu",
+  "ServiceId": "official-eu-realm-core",
+  "ServiceSecret": "CHANGE_ME_REALMCORE_SHARED_SECRET"
+}
+```
+
+Mit csinal:
+
+* innen eri el a RealmCore az AuthApi-t
+
+Mit kell modositani:
+
+* `BaseUrl`
+* `ServiceId`
+* `ServiceSecret`
+
+Ez kulcsfontossagu, mert a RealmCore ezen keresztul keri le:
+
+* global GameData-t
+* schema manifestet
+* migration tartalmat
+* ide kuld heartbeatet is
+
+---
+
+## 7.3 `JwtValidation`
+
+Pelda:
+
+```json
+"JwtValidation": {
+  "Issuer": "Gnosis.Auth",
+  "Audience": "Gnosis.Clients",
+  "PublicKeyPemPath": "./keys/auth_public.pem",
+  "ClockSkewSeconds": 30
+}
+```
+
+Mit csinal:
+
+* a kliens access token ellenorzesere szolgalo beallitasok
+
+Mit kell modositani:
+
+* a publikus kulcs eleresi utja
+* issuer
+* audience
+
+Fontos:
+
+* itt csak a **publikus kulcs** kell
+* a privat kulcs az AuthApi-n marad
+
+---
+
+## 7.4 `ServiceAuth`
+
+Pelda:
+
+```json
+"ServiceAuth": {
+  "Enabled": true,
+  "AllowedClockSkewSeconds": 30,
+  "NonceTtlSeconds": 90,
+  "Clients": [
+    {
+      "ServiceId": "node-agent-01",
+      "Secret": "CHANGE_ME_NODE_SECRET",
+      "Roles": [ "node-heartbeat.write", "zone-heartbeat.write", "zone-command.read" ],
+      "AllowedRealmIds": [ "official-eu-1" ]
+    }
+  ]
+}
+```
+
+Mit csinal:
+
+* belso service-to-service auth
+* nodeok, belso szolgaltatasok, es egyeb komponensek hitelesitese
+
+Mit kell modositani:
+
+* service ID-k
+* secret-ek
+* role-ok
+* allowed realm ID-k
+
+---
+
+## 7.5 `LegacyNodeAuth`
+
+Pelda:
+
+```json
+"LegacyNodeAuth": {
+  "Enabled": false,
+  "HeaderName": "X-Legacy-Node-Key",
+  "ApiKeys": []
+}
+```
+
+Mit csinal:
+
+* atmeneti node auth tamogatas
+* csak akkor hasznald, ha a NodeAgent meg nem allt at az uj modellre
+
+Javaslat:
+
+* ha lehet, ezt kapcsold ki
+* csak atmeneti kompatibilitasi celra hasznald
+
+---
+
+## 7.6 `Security`
+
+Pelda:
+
+```json
+"Security": {
+  "RequireHttps": true,
+  "KnownProxies": [ "127.0.0.1" ],
+  "KnownIPNetworks": []
+}
+```
+
+Mit csinal:
+
+* HTTPS policy
+* trusted proxy lista
+* forwarded headers kezeles
+
+Mit kell modositani:
+
+* ha ugyanazon a gepen van Nginx, a `127.0.0.1` jo
+* ha kulon reverse proxy van, annak IP-je kell ide
+
+Fontos:
+
+* a `KnownIPNetworks` az uj forma
+* a regi `KnownNetworks` mar ne legyen benne
+
+---
+
+## 7.7 `Cors`
+
+Pelda:
+
+```json
+"Cors": {
+  "AllowedOrigins": []
+}
+```
+
+Mit csinal:
+
+* browser alapu kliensek CORS policy-ja
+
+Megjegyzes:
+
+* ha nincs webes frontend, ez kevesbe fontos
+* ha lesz admin web UI vagy launcher oldal, annak origin-jeit itt kell megadni
+
+---
+
+## 7.8 `Realm`
+
+Pelda:
+
+```json
+"Realm": {
+  "RealmId": "official-eu-1",
+  "RealmName": "Gnosis Official EU",
+  "Region": "EU",
+  "HeartbeatIntervalSeconds": 30,
+  "ZoneStartupPollSeconds": 15
+}
+```
+
+Mit csinal:
+
+* a realm alap metadata-ja
+* heartbeat periodus
+* zone startup poll timeout
+
+Mit kell modositani:
+
+* realm ID
+* realm nev
+* regio
+* timing beallitasok
+
+---
+
+## 7.9 `SchemaMigration`
+
+Pelda:
+
+```json
+"SchemaMigration": {
+  "Enabled": true,
+  "AllowDestructiveMigrations": false,
+  "Channel": "realmcore"
+}
+```
+
+Mit csinal:
+
+* engedelyezi a remote schema sync-et
+* destructive migration guard
+* logikai channel nev
+
+Mit kell modositani:
+
+* altalaban csak `AllowDestructiveMigrations`, ha tenyleg kell
+
+Fontos:
+
+* itt mar nincs `DirectoryPath`
+* a RealmCore nem helyi migration fajlokbol dolgozik
+
+---
+
+## 7.10 `GameDataCache`
+
+Pelda:
+
+```json
+"GameDataCache": {
+  "Enabled": true,
+  "RefreshIntervalSeconds": 300,
+  "WarmOnStartup": true
+}
+```
+
+Mit csinal:
+
+* GameData cache viselkedese
+* refresh periodus
+* startup warm-up
+
+Mit kell modositani:
+
+* ha ritkabban vagy surubben akarod frissiteni a cache-t
+
+---
+
+## 8. Remote schema migration modell
+
+Ez az egyik legfontosabb resz.
+
+A RealmCore **nem helyi SQL fajlokat** olvas.
+Ahelyett ezt csinalja:
+
+1. indulaskor lekeri az AuthApi-bol a schema manifestet
+2. megnézi a sajat `schema_migrations` tablajat
+3. ami migration hianyzik, azt egyenkent lekeri az AuthApi-bol
+4. checksumot ellenoriz
+5. lefuttatja a sajat MySQL adatbazisan
+6. beirja a `schema_migrations` tablaba
+
+Ez azt jelenti, hogy:
+
+* a migration source az AuthApi
+* a migration executor a RealmCore
+* a sajat DB ownership a RealmCore-nal marad
+
+Ez a helyes modell official es community realmhez is.
+
+---
+
+## 9. Global GameData cache modell
+
+A GameData logika jelenleg ugy van kitalalva, hogy:
+
+* AuthApi = canonical source
+* RealmCore = cache + merge pont
+* GameServer = RealmCore-tol kap vegleges adatot
+
+A jelenlegi allapotban a RealmCore:
+
+* le tudja kerni a global GameData snapshotot
+* cache-elni tudja
+* startupkor warmolni tudja a cache-t
+
+Kesobb erre lehet rahuzni:
+
+* realm override-ok
+* disable / tombstone logika
+* custom item/entity definiciok
+* community specifikus merge
+
+---
+
+## 10. Elso telepites Ubuntu VPS-en
+
+Ez a README abbol indul ki, hogy:
+
+* a publish outputot sajat gepedrol feltoltod
+* a source kodot nem teszed fel
+* a RealmCore sajat MySQL adatbazist hasznal
+* az AuthApi mar mukodik
+
+## 10.1 Mappak letrehozasa
 
 ```bash
 sudo mkdir -p /opt/gnosis/realmcore/app
-sudo mkdir -p /opt/gnosis/realmcore/app/keys
 sudo mkdir -p /opt/gnosis/realmcore/app/logs
 ```
 
-### 6.3 Publish output feltoltese
+## 10.2 Publish output feltoltese
 
-A publisholt fajlokat kozvetlenul az `app` mappaba kell feltolteni.
+A publish output **tartalmat** toltsd fel ide:
 
-### 6.4 AuthApi publikus kulcs feltoltese
-
-A RealmCore-nak ellenoriznie kell az AuthApi altal kiadott JWT-t. Ehhez a publikus RSA kulcs kell.
-
-Helye:
 ```text
-/opt/gnosis/realmcore/app/keys/auth_public.pem
+/opt/gnosis/realmcore/app
 ```
 
-### 6.5 MySQL adatbazis letrehozasa
+## 10.3 Futtathato jog
+
+Ha kell:
+
+```bash
+chmod +x /opt/gnosis/realmcore/app/GnosisRealmCore
+```
+
+## 10.4 MySQL telepitese
+
+Ha meg nincs:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y mysql-server
+```
+
+## 10.5 Realm adatbazis letrehozasa
+
+Lepj be MySQL-be:
 
 ```bash
 sudo mysql
 ```
 
+Majd pelda:
+
 ```sql
 CREATE DATABASE gnosis_realm01 CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
-CREATE USER 'gnosis_realm'@'127.0.0.1' IDENTIFIED BY 'CHANGE_ME';
+CREATE USER 'gnosis_realm'@'127.0.0.1' IDENTIFIED BY 'EROS_DB_JELSZO';
 GRANT ALL PRIVILEGES ON gnosis_realm01.* TO 'gnosis_realm'@'127.0.0.1';
 
-CREATE USER 'gnosis_realm'@'localhost' IDENTIFIED BY 'CHANGE_ME';
+CREATE USER 'gnosis_realm'@'localhost' IDENTIFIED BY 'EROS_DB_JELSZO';
 GRANT ALL PRIVILEGES ON gnosis_realm01.* TO 'gnosis_realm'@'localhost';
 
 FLUSH PRIVILEGES;
 EXIT;
 ```
 
-### 6.6 appsettings.Production.json letrehozasa
+Megjegyzes:
 
-A publish output melle hozz letre egy `appsettings.Production.json` fajlt. A legfontosabb mezok:
+* `localhost` es `127.0.0.1` kulon kezeles sok hibat megelőz
 
-- `Database:ConnectionString`
-- `AuthApi:BaseUrl`
-- `AuthApi:ServiceId`
-- `AuthApi:ServiceSecret`
-- `JwtValidation:PublicKeyPemPath`
-- `Realm:RealmId`
-- `Realm:DisplayName`
-- `Realm:Region`
-- `Realm:Kind`
-- `Realm:PublicBaseUrl`
-- `LegacyNodeAuth:ApiKey`
-- `ServiceAuth:Clients`
+## 10.6 JWT public key
 
-### 6.7 Kezi inditas teszthez
+Ha a RealmCore validalja a kliens access tokent, szuksege lesz az AuthApi publikus kulcsara.
+
+Masold at az AuthApi publikus kulcsat peldaul ide:
+
+```text
+/opt/gnosis/realmcore/app/keys/auth_public.pem
+```
+
+## 10.7 appsettings.Production.json
+
+Hozd letre itt:
+
+```text
+/opt/gnosis/realmcore/app/appsettings.Production.json
+```
+
+Es allitsd be:
+
+* sajat DB connection string
+* AuthApi URL
+* AuthApi service secret
+* JWT public key path
+* realm metadata
+* schema migration settings
+
+## 10.8 Kezi inditas
+
+A jelenlegi publish forma szerint:
 
 ```bash
 cd /opt/gnosis/realmcore/app
-chmod +x ./GnosisRealmCore
 ASPNETCORE_ENVIRONMENT=Production ./GnosisRealmCore
 ```
 
-### 6.8 Health endpoint teszt
+Indulaskor a kovetkezok tortennek:
 
-```bash
-curl http://127.0.0.1:5159/health/live
-curl http://127.0.0.1:5159/health/ready
-```
+* DB kapcsolat felall
+* remote schema sync lefut
+* global GameData cache warm-up lefut
+* API endpointok felallnak
 
-## 7. appsettings szekciok
+---
 
-### `Urls`
-A helyi Kestrel endpoint. Javasolt:
-```json
-"Urls": "http://127.0.0.1:5159"
-```
+## 11. systemd service
 
-### `Database`
-A realm DB kapcsolat.
+Javasolt `systemd` service.
 
-### `AuthApi`
-Az AuthApi URL-je es az a service identity, amivel a RealmCore az AuthApi-t hivja.
-
-### `JwtValidation`
-Az AuthApi publikus kulcsa es a vart issuer/audience.
-
-### `Realm`
-A realm identitasa. Community realmnel itt add meg a sajat nevet, regiojat es `Kind` erteket.
-
-### `ServiceAuth`
-A NodeAgent, GameServer vagy mas belso szolgaltatasok HMAC auth adatai.
-
-### `LegacyNodeAuth`
-Atmeneti kompatibilitasi opcio a jelenlegi `X-Server-Admin-Key` fejlec alapjan.
-
-### `Security`
-HTTPS es trusted proxy beallitasok.
-
-### `SchemaMigrations`
-A startupkori SQL migration runner beallitasai.
-
-## 8. Fo API endpointok
-
-### Public / kliens oldali
-- `GET /health/live`
-- `GET /health/ready`
-- `GET /api/character/list`
-- `POST /api/character/create`
-- `GET /api/character/{id}/details`
-- `DELETE /api/character/{id}`
-- `GET /api/zone/find/{zoneName}`
-
-### Belso / jatekszerver oldali
-- `POST /api/character/save`
-- `POST /api/heartbeat/node`
-- `GET /api/gamedata`
-- `GET /api/gamedata/version`
-
-### Belso / nodeagent oldali
-- `POST /api/internal/nodes/register`
-- `POST /api/internal/nodes/heartbeat`
-- `GET /api/internal/nodes/{nodeId}/commands/next`
-- `POST /api/internal/nodes/{nodeId}/commands/{commandId}/ack`
-
-## 9. Hogyan mukodik a GameData itt?
-
-A RealmCore indulaskor vagy frissiteskor:
-1. lehuzza az AuthApi canonical snapshotjat
-2. beolvassa a sajat `realm_game_data_overrides` rekordjait
-3. merge-eli a ket reteget
-4. memoriaban cache-eli az eredmenyt
-5. ezt adja tovabb a jatekszervereknek
-
-A jatekszerver kozvetlenul nem az AuthApi-bol dolgozik.
-
-## 10. Mi tortenik, ha a schema valtozik egy uj release-ben?
-
-A publisholt release tartalmazza a kovetkezo SQL migration fajlokat is. Inditaskor:
-- a mar alkalmazott migrationokat a `schema_migrations` tabla alapjan atugorja
-- az ujakat lefuttatja
-- ha destruktiv migration van es a config engedi, az oszlopok/tablak torlese is megtortenik
-
-Ez azt jelenti, hogy official es community realmeken ugyanazzal a release csomaggal vegezheto schema update.
-
-## 11. systemd service pelda
+Pelda:
 
 ```ini
 [Unit]
-Description=Gnosis Realm Core API
+Description=Gnosis Realm Core
 After=network.target
 
 [Service]
@@ -259,12 +859,23 @@ SyslogIdentifier=gnosis-realmcore
 WantedBy=multi-user.target
 ```
 
-## 12. Nginx pelda
+---
+
+## 12. Nginx reverse proxy
+
+Ha a RealmCore HTTP API-jat publikalni akarod domainen keresztul, akkor Nginx moge tedd.
+
+Pelda topologia:
+
+* RealmCore helyben hallgat, peldaul `127.0.0.1:5159`
+* Nginx fogadja a publikus kero forgalmat
+* Nginx tovabbit RealmCore fele
+
+Pelda host:
 
 ```nginx
 server {
-    listen 80;
-    server_name realm.playgnosis.hu;
+    server_name realm.example.com;
 
     location / {
         proxy_pass http://127.0.0.1:5159;
@@ -274,14 +885,107 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Real-IP $remote_addr;
     }
+
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/realm.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/realm.example.com/privkey.pem;
 }
 ```
 
-## 13. Fontos megjegyzesek
+Megjegyzes:
 
-- A RealmCore publisholva lesz community hasznalatra is, ezert a README publikus telepitesre irt.
-- A source kod szerverre telepitese nem szukseges.
-- A schema update rendszer szandekosan release-alapu.
-- A jelenlegi package mar fel van keszitve a kesobbi NodeAgent rewrite-ra.
-- A jelenlegi Unity kliens es szerver route-jaihoz igyekszik kompatibilis maradni.
+* ha a RealmCore csak belso backend, akkor nem kell feltetlen publikus domain ala rakni
+* ha viszont a kliens vagy a GameServer HTTP-n eri el, akkor kellhet
 
+---
+
+## 13. Leggyakoribb hibak
+
+### `Access denied for user ...`
+
+Oka:
+
+* rossz DB user
+* rossz jelszo
+* `localhost` vs `127.0.0.1`
+
+### `401` az AuthApi hivaskor
+
+Oka:
+
+* rossz `ServiceId`
+* rossz `ServiceSecret`
+* rossz HMAC signature
+* rossz timestamp / nonce
+
+### `403` a schema endpointon
+
+Oka:
+
+* az AuthApi oldalon a RealmCore service identity-hez nincs hozzaadva a `realm-schema.read` role
+
+### `JWT validation` hiba
+
+Oka:
+
+* rossz public key path
+* nem egyezik issuer / audience
+* rossz token
+
+### `Address already in use`
+
+Oka:
+
+* ugyanazon a porton mar fut masik process vagy service
+
+### startup migration hiba
+
+Oka:
+
+* az AuthApi nem ad manifestet
+* az AuthApi migration checksum nem egyezik
+* destructive migration tiltva van
+* a migration SQL hibas
+
+---
+
+## 14. Production checklist
+
+Telepites elott:
+
+* legyen mukodo AuthApi
+* add hozza a RealmCore service identity-t az AuthApi `ServiceAuth` configjahoz
+* legyen benne a `realm-schema.read` role
+* legyen benne a `realm-gamedata.read` role
+* official realm esetben legyen heartbeat jogosultsag is
+* hozd letre a realm DB-t
+* allitsd be a DB usert
+* masold at az AuthApi publikus kulcsat
+* allitsd be az `appsettings.Production.json`-t
+* teszteld kezi inditassal
+* csak utana rakd `systemd` ala
+
+---
+
+## 15. Gyors osszefoglalo
+
+A `GnosisRealmCore` a realm szintu backend szolgaltatas.
+
+Feladata:
+
+* save/load
+* zone es node orchestration alap
+* AuthApi integration
+* global GameData cache
+* remote schema migration vegrehajtas
+* official heartbeat kuldes
+* community-friendly realm alap biztositas
+
+A legfontosabb tervezesi elvek:
+
+* a RealmCore sajat MySQL adatbazist hasznal
+* a migration forrasa az AuthApi
+* a migration vegrehajtasa a RealmCore feladata
+* a GameData canonical source az AuthApi
+* a RealmCore cache-el es kesobb merge-el
+* a GameServer a RealmCore-tol kap adatot

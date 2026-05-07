@@ -6,7 +6,7 @@ public sealed class SchemaManifestResponse
     public string LatestMigrationId { get; set; } = string.Empty;
     public int MigrationCount { get; set; }
     public DateTime PublishedAtUtc { get; set; }
-    public List<SchemaMigrationDescriptorResponse> Migrations { get; set; } = new();
+    public List<SchemaMigrationDescriptorResponse> Migrations { get; set; } = [];
 }
 
 public sealed class SchemaMigrationDescriptorResponse

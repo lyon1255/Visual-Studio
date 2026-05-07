@@ -6,18 +6,13 @@ namespace GnosisAuthServer.Controllers;
 
 [ApiController]
 [Route("api/internal/schema")]
-public sealed class InternalSchemaController : ControllerBase
+public sealed class InternalSchemaController(
+    IServiceRequestAuthenticator serviceAuthenticator,
+    ISchemaCatalogService schemaCatalogService) : ControllerBase
 {
-    private readonly IServiceRequestAuthenticator _serviceAuthenticator;
-    private readonly ISchemaCatalogService _schemaCatalogService;
+    private readonly IServiceRequestAuthenticator _serviceAuthenticator = serviceAuthenticator;
+    private readonly ISchemaCatalogService _schemaCatalogService = schemaCatalogService;
 
-    public InternalSchemaController(
-        IServiceRequestAuthenticator serviceAuthenticator,
-        ISchemaCatalogService schemaCatalogService)
-    {
-        _serviceAuthenticator = serviceAuthenticator;
-        _schemaCatalogService = schemaCatalogService;
-    }
 
     [HttpGet("manifest")]
     public async Task<IActionResult> GetManifest(CancellationToken cancellationToken)

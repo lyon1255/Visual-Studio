@@ -157,13 +157,13 @@ builder.Services.AddRateLimiter(options =>
 
 builder.Services.AddCors(options =>
 {
-    var configured = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>()?.AllowedOrigins ?? Array.Empty<string>();
+    var configured = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>()?.AllowedOrigins ?? [];
     options.AddPolicy("ConfiguredOrigins", policy =>
     {
         if (configured.Length == 0)
         {
             policy.WithOrigins("https://localhost.invalid").AllowAnyHeader().AllowAnyMethod();
-            return;
+            return; 
         }
 
         policy.WithOrigins(configured).AllowAnyHeader().AllowAnyMethod();
@@ -175,7 +175,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     options.ForwardLimit = 2;
 
-    var configuredProxies = builder.Configuration.GetSection("Security:KnownProxies").Get<string[]>() ?? Array.Empty<string>();
+    var configuredProxies = builder.Configuration.GetSection("Security:KnownProxies").Get<string[]>() ?? [];
     foreach (var proxy in configuredProxies)
     {
         if (IPAddress.TryParse(proxy, out var ip))
