@@ -156,7 +156,7 @@ public static class AuthCommandModeRunner
         }
 
         var keyProvider = services.GetRequiredService<IRsaKeyProvider>();
-        _ = keyProvider.GetSigningCredentials();
+        _ = keyProvider.GetSigningKey();
         _ = keyProvider.GetValidationKey();
 
         Console.WriteLine("JWT key provider OK");
