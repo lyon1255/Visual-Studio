@@ -26,11 +26,6 @@ public sealed class AuthApiClient : IAuthApiClient
     public Task<GlobalGameDataSnapshotResponse?> GetGlobalGameDataSnapshotAsync(CancellationToken cancellationToken)
         => SendAuthorizedAsync<GlobalGameDataSnapshotResponse>(HttpMethod.Get, "/api/internal/gamedata/snapshot", null, cancellationToken);
 
-    public async Task SendOfficialHeartbeatAsync(OfficialRealmHeartbeatRequest requestModel, CancellationToken cancellationToken)
-    {
-        _ = await SendAuthorizedAsync<object>(HttpMethod.Post, "/api/internal/official-realms/heartbeat", requestModel, cancellationToken);
-    }
-
     public Task<SchemaManifestResponse?> GetSchemaManifestAsync(CancellationToken cancellationToken)
         => SendAuthorizedAsync<SchemaManifestResponse>(HttpMethod.Get, "/api/internal/schema/manifest", null, cancellationToken);
 
@@ -41,17 +36,26 @@ public sealed class AuthApiClient : IAuthApiClient
             null,
             cancellationToken);
 
+    public async Task SendRealmHeartbeatAsync(RealmHeartbeatRequest request, CancellationToken cancellationToken)
+    {
+        _ = await SendAuthorizedAsync<object>(
+            HttpMethod.Post,
+            "/api/internal/realms/heartbeat",
+            request,
+            cancellationToken);
+    }
+
     private async Task<T?> SendAuthorizedAsync<T>(HttpMethod method, string relativePath, object? body, CancellationToken cancellationToken)
     {
         var client = _httpClientFactory.CreateClient(nameof(AuthApiClient));
         client.BaseAddress = new Uri(_options.BaseUrl.TrimEnd('/'));
 
-        string bodyJson = body is null ? string.Empty : JsonSerializer.Serialize(body, JsonOptions);
-        string bodyHashHex = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bodyJson))).ToLowerInvariant();
-        string timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
-        string nonce = Guid.NewGuid().ToString("N");
+        var bodyJson = body is null ? string.Empty : JsonSerializer.Serialize(body, JsonOptions);
+        var bodyHashHex = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(bodyJson))).ToLowerInvariant();
+        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
+        var nonce = Guid.NewGuid().ToString("N");
 
-        string canonical = string.Join("\n",
+        var canonical = string.Join("\n",
             method.Method.ToUpperInvariant(),
             relativePath,
             timestamp,
@@ -59,21 +63,21 @@ public sealed class AuthApiClient : IAuthApiClient
             bodyHashHex);
 
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_options.ServiceSecret));
-        string signatureHex = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
+        var signatureHex = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
 
-        using var request = new HttpRequestMessage(method, relativePath);
-        request.Headers.Add(ServiceAuthHeaderNames.ServiceId, _options.ServiceId);
-        request.Headers.Add(ServiceAuthHeaderNames.Timestamp, timestamp);
-        request.Headers.Add(ServiceAuthHeaderNames.Nonce, nonce);
-        request.Headers.Add(ServiceAuthHeaderNames.Signature, signatureHex);
-        request.Headers.Add(ServiceAuthHeaderNames.BodySha256, bodyHashHex);
+        using var requestMessage = new HttpRequestMessage(method, relativePath);
+        requestMessage.Headers.Add(ServiceAuthHeaderNames.ServiceId, _options.ServiceId);
+        requestMessage.Headers.Add(ServiceAuthHeaderNames.Timestamp, timestamp);
+        requestMessage.Headers.Add(ServiceAuthHeaderNames.Nonce, nonce);
+        requestMessage.Headers.Add(ServiceAuthHeaderNames.Signature, signatureHex);
+        requestMessage.Headers.Add(ServiceAuthHeaderNames.BodySha256, bodyHashHex);
 
         if (!string.IsNullOrEmpty(bodyJson))
         {
-            request.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+            requestMessage.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
         }
 
-        using var response = await client.SendAsync(request, cancellationToken);
+        using var response = await client.SendAsync(requestMessage, cancellationToken);
         var responseText = await response.Content.ReadAsStringAsync(cancellationToken);
 
         if (!response.IsSuccessStatusCode)

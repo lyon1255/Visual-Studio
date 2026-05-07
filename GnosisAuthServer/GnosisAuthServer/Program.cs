@@ -1,3 +1,4 @@
+// Program.cs (Auth)
 using GnosisAuthServer.Data;
 using GnosisAuthServer.Infrastructure;
 using GnosisAuthServer.Options;
@@ -31,6 +32,7 @@ builder.Services.Configure<SchemaDeliveryOptions>(builder.Configuration.GetSecti
 
 var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
     ?? throw new InvalidOperationException("Database configuration is missing.");
+
 if (string.IsNullOrWhiteSpace(databaseOptions.ConnectionString))
 {
     throw new InvalidOperationException("Database:ConnectionString is missing.");
@@ -38,10 +40,12 @@ if (string.IsNullOrWhiteSpace(databaseOptions.ConnectionString))
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()
     ?? throw new InvalidOperationException("Jwt configuration is missing.");
+
 if (string.IsNullOrWhiteSpace(jwtOptions.PrivateKeyPemPath))
 {
     throw new InvalidOperationException("Jwt:PrivateKeyPemPath is missing.");
 }
+
 if (string.IsNullOrWhiteSpace(jwtOptions.PublicKeyPemPath))
 {
     throw new InvalidOperationException("Jwt:PublicKeyPemPath is missing.");
@@ -50,12 +54,15 @@ if (string.IsNullOrWhiteSpace(jwtOptions.PublicKeyPemPath))
 builder.WebHost.UseUrls(builder.Configuration["Urls"] ?? "http://127.0.0.1:5158");
 
 builder.Services.AddDbContext<AuthDbContext>(options =>
-    options.UseMySql(databaseOptions.ConnectionString, ServerVersion.AutoDetect(databaseOptions.ConnectionString)));
+    options.UseMySql(
+        databaseOptions.ConnectionString,
+        ServerVersion.AutoDetect(databaseOptions.ConnectionString)));
 
 var rsaKeyProvider = new FileRsaKeyProvider(Options.Create(jwtOptions));
 builder.Services.AddSingleton<IRsaKeyProvider>(rsaKeyProvider);
 
 builder.Services.AddMemoryCache();
+
 builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
@@ -113,13 +120,20 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             }));
 
+    options.AddPolicy("realm-heartbeat", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetServicePartitionKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 12,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
     options.AddPolicy("official-heartbeat", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.Request.Headers[ServiceAuthHeaderNames.ServiceId].ToString() switch
-            {
-                { Length: > 0 } value => value,
-                _ => "unknown"
-            },
+            partitionKey: GetServicePartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 12,
@@ -130,11 +144,18 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("realm-gamedata-read", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: context.Request.Headers[ServiceAuthHeaderNames.ServiceId].ToString() switch
+            partitionKey: GetServicePartitionKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
             {
-                { Length: > 0 } value => value,
-                _ => "unknown"
-            },
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("realm-schema-read", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetServicePartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 60,
@@ -157,16 +178,23 @@ builder.Services.AddRateLimiter(options =>
 
 builder.Services.AddCors(options =>
 {
-    var configured = builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>()?.AllowedOrigins ?? [];
+    var configuredOrigins =
+        builder.Configuration.GetSection(CorsOptions.SectionName).Get<CorsOptions>()?.AllowedOrigins
+        ?? Array.Empty<string>();
+
     options.AddPolicy("ConfiguredOrigins", policy =>
     {
-        if (configured.Length == 0)
+        if (configuredOrigins.Length == 0)
         {
-            policy.WithOrigins("https://localhost.invalid").AllowAnyHeader().AllowAnyMethod();
-            return; 
+            policy.WithOrigins("https://localhost.invalid")
+                .AllowAnyHeader()
+                .AllowAnyMethod();
+            return;
         }
 
-        policy.WithOrigins(configured).AllowAnyHeader().AllowAnyMethod();
+        policy.WithOrigins(configuredOrigins)
+            .AllowAnyHeader()
+            .AllowAnyMethod();
     });
 });
 
@@ -175,7 +203,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
     options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
     options.ForwardLimit = 2;
 
-    var configuredProxies = builder.Configuration.GetSection("Security:KnownProxies").Get<string[]>() ?? [];
+    var configuredProxies =
+        builder.Configuration.GetSection("Security:KnownProxies").Get<string[]>()
+        ?? Array.Empty<string>();
+
     foreach (var proxy in configuredProxies)
     {
         if (IPAddress.TryParse(proxy, out var ip))
@@ -197,6 +228,7 @@ if (!app.Environment.IsDevelopment())
 app.Use(async (context, next) =>
 {
     var securityOptions = context.RequestServices.GetRequiredService<IOptions<SecurityOptions>>().Value;
+
     if (securityOptions.RequireHttps && !context.Request.IsHttps)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
@@ -211,6 +243,7 @@ app.UseCors("ConfiguredOrigins");
 app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
+
 app.MapControllers();
 
 using (var scope = app.Services.CreateScope())
@@ -220,3 +253,9 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.Run();
+
+static string GetServicePartitionKey(HttpContext context)
+{
+    var serviceId = context.Request.Headers[ServiceAuthHeaderNames.ServiceId].ToString();
+    return string.IsNullOrWhiteSpace(serviceId) ? "unknown" : serviceId;
+}

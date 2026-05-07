@@ -30,7 +30,9 @@ public sealed class RealmHeartbeatHostedService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        if (string.IsNullOrWhiteSpace(_authApiOptions.BaseUrl) || string.IsNullOrWhiteSpace(_authApiOptions.ServiceId))
+        if (string.IsNullOrWhiteSpace(_authApiOptions.BaseUrl) ||
+            string.IsNullOrWhiteSpace(_authApiOptions.ServiceId) ||
+            string.IsNullOrWhiteSpace(_authApiOptions.ServiceSecret))
         {
             _logger.LogWarning("AuthApi heartbeat is disabled because AuthApi configuration is incomplete.");
             return;
@@ -48,31 +50,44 @@ public sealed class RealmHeartbeatHostedService : BackgroundService
 
                 var healthyZones = await dbContext.RealmZoneInstances
                     .AsNoTracking()
-                    .Where(x => x.LastHeartbeatUtc != null && x.LastHeartbeatUtc >= healthyCutoff && x.Status == "online")
+                    .Where(x => x.LastHeartbeatUtc != null &&
+                                x.LastHeartbeatUtc >= healthyCutoff &&
+                                x.Status == "online")
                     .ToListAsync(stoppingToken);
 
                 var currentPlayers = healthyZones.Sum(x => x.CurrentPlayers);
                 var healthyZoneCount = healthyZones.Count;
+
+                var realmType = string.Equals(_realmOptions.Kind, "official", StringComparison.OrdinalIgnoreCase)
+                    ? "official"
+                    : "community";
+
                 var status = healthyZoneCount > 0 ? "online" : "idle";
 
-                await _authApiClient.SendOfficialHeartbeatAsync(new OfficialRealmHeartbeatRequest
+                await _authApiClient.SendRealmHeartbeatAsync(new RealmHeartbeatRequest
                 {
                     RealmId = _realmOptions.RealmId,
-                    DisplayName = _realmOptions.DisplayName,
+                    RealmName = _realmOptions.DisplayName,
+                    RealmType = realmType,
                     Region = _realmOptions.Region,
-                    PublicBaseUrl = _realmOptions.PublicBaseUrl,
                     Status = status,
                     CurrentPlayers = currentPlayers,
                     MaxPlayers = _realmOptions.MaxPlayers,
-                    HealthyZoneCount = healthyZoneCount
+                    HealthyZoneCount = healthyZoneCount,
+                    PublicBaseUrl = _realmOptions.PublicBaseUrl,
+                    Motd = null,
+                    Version = null,
+                    Modded = realmType == "community"
                 }, stoppingToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
                 _logger.LogError(ex, "Failed to send realm heartbeat to AuthApi.");
             }
 
-            await Task.Delay(TimeSpan.FromSeconds(Math.Max(10, _authApiOptions.HeartbeatIntervalSeconds)), stoppingToken);
+            await Task.Delay(
+                TimeSpan.FromSeconds(Math.Max(10, _authApiOptions.HeartbeatIntervalSeconds)),
+                stoppingToken);
         }
     }
 }

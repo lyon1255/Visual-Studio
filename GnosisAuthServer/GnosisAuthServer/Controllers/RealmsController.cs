@@ -23,17 +23,23 @@ public sealed class RealmsController : ControllerBase
     public async Task<ActionResult<IReadOnlyList<RealmListItemResponse>>> GetRealms(CancellationToken cancellationToken)
     {
         var realms = await _realmRegistryService.GetPublicRealmsAsync(cancellationToken);
+
         var response = realms.Select(x => new RealmListItemResponse
         {
             RealmId = x.RealmId,
             DisplayName = x.DisplayName,
             Region = x.Region,
+            RealmType = x.RealmType,
             Kind = x.Kind,
             PublicBaseUrl = x.PublicBaseUrl,
             Status = x.Status,
             CurrentPlayers = x.CurrentPlayers,
             MaxPlayers = x.MaxPlayers,
-            HealthyZoneCount = x.HealthyZoneCount
+            HealthyZoneCount = x.HealthyZoneCount,
+            Modded = x.Modded,
+            Motd = x.Motd,
+            Version = x.Version,
+            LastHeartbeatAtUtc = x.LastHeartbeatAt
         }).ToList();
 
         return Ok(response);
