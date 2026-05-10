@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS realms (
     healthy_zone_count INT NOT NULL DEFAULT 0,
     is_listed BIT NOT NULL DEFAULT 1,
     is_official BIT NOT NULL DEFAULT 1,
+    enabled TINYINT(1) NOT NULL DEFAULT 1,
     last_heartbeat_at DATETIME NULL,
     created_at DATETIME NOT NULL,
     updated_at DATETIME NOT NULL,
@@ -117,4 +118,4 @@ CREATE TABLE IF NOT EXISTS banned_ip_addresses (
     created_at_utc DATETIME NOT NULL,
     expires_at_utc DATETIME NULL,
     UNIQUE KEY uq_banned_ip_addresses_ip_address (ip_address)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

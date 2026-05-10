@@ -72,6 +72,8 @@ builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
+builder.Services.AddSingleton<IAuthCommandModule, VersionCommandModule>();
+
 
 builder.Services.AddSingleton<IAuthCommandModule, DoctorCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, DbCommandModule>();
