@@ -1,4 +1,5 @@
 using GnosisAuthServer.CommandMode;
+using GnosisAuthServer.CommandMode.Modules;
 using GnosisAuthServer.Data;
 using GnosisAuthServer.Infrastructure;
 using GnosisAuthServer.Options;
@@ -71,6 +72,15 @@ builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
+
+builder.Services.AddSingleton<IAuthCommandModule, DoctorCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, DbCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, JwtCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, EnvironmentCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, RealmsCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, ServicesCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, GameDataCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, SchemaCommandModule>();
 
 builder.Services.AddControllers();
 
