@@ -247,6 +247,33 @@ app.Use(async (context, next) =>
     await next();
 });
 
+app.Use(async (context, next) =>
+{
+    var remoteIp = context.Connection.RemoteIpAddress?.ToString();
+    if (!string.IsNullOrWhiteSpace(remoteIp))
+    {
+        await using var scope = app.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
+        var nowUtc = DateTime.UtcNow;
+
+        var isBlocked = await dbContext.BannedIpAddresses
+            .AsNoTracking()
+            .AnyAsync(x =>
+                x.Enabled &&
+                x.IpAddress == remoteIp &&
+                (x.ExpiresAtUtc == null || x.ExpiresAtUtc > nowUtc));
+
+        if (isBlocked)
+        {
+            context.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await context.Response.WriteAsJsonAsync(new { error = "This IP address is blocked." });
+            return;
+        }
+    }
+
+    await next();
+});
+
 app.UseCors("ConfiguredOrigins");
 app.UseRateLimiter();
 app.UseAuthentication();

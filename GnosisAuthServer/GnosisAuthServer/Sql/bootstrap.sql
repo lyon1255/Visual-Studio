@@ -108,3 +108,13 @@ CREATE TABLE IF NOT EXISTS gamedata_versions (
     UNIQUE KEY ux_gamedata_versions_version_number (version_number),
     KEY ix_gamedata_versions_published_at (published_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS banned_ip_addresses (
+    id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    ip_address VARCHAR(64) NOT NULL,
+    reason VARCHAR(256) NULL,
+    enabled TINYINT(1) NOT NULL DEFAULT 1,
+    created_at_utc DATETIME NOT NULL,
+    expires_at_utc DATETIME NULL,
+    UNIQUE KEY uq_banned_ip_addresses_ip_address (ip_address)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

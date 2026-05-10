@@ -12,6 +12,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<DbSpell> GameSpells => Set<DbSpell>();
     public DbSet<DbAura> GameAuras => Set<DbAura>();
     public DbSet<GameDataVersion> GameDataVersions => Set<GameDataVersion>();
+    public DbSet<BannedIpAddress> BannedIpAddresses => Set<BannedIpAddress>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

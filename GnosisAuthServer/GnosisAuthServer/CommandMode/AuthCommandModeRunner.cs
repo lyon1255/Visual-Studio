@@ -5,8 +5,11 @@ using GnosisAuthServer.Security;
 using GnosisAuthServer.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Net;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace GnosisAuthServer.CommandMode;
 
@@ -64,9 +67,11 @@ public static class AuthCommandModeRunner
             "db" => await ExecuteDbAsync(services, args.Skip(1).ToArray()),
             "jwt" => ExecuteJwt(services, args.Skip(1).ToArray()),
             "environment" => ExecuteEnvironment(app, args.Skip(1).ToArray()),
-            "realms" => await ExecuteRealmsAsync(services, args.Skip(1).ToArray()),
+            "realms" => await ExecuteRealmsAsync(app, services, args.Skip(1).ToArray()),
+            "services" => await ExecuteServicesAsync(app, services, args.Skip(1).ToArray()),
             "gamedata" => await ExecuteGameDataAsync(services, args.Skip(1).ToArray()),
             "schema" => await ExecuteSchemaAsync(services, args.Skip(1).ToArray()),
+            "security" => await ExecuteSecurityAsync(services, args.Skip(1).ToArray()),
             _ => UnknownCommand(category)
         };
     }
@@ -89,6 +94,7 @@ public static class AuthCommandModeRunner
         var dbContext = services.GetRequiredService<AuthDbContext>();
         var jwtOptions = services.GetRequiredService<IOptions<JwtOptions>>().Value;
         var schemaOptions = services.GetRequiredService<IOptions<SchemaDeliveryOptions>>().Value;
+        var serviceAuthOptions = services.GetRequiredService<IOptions<ServiceAuthOptions>>().Value;
 
         Console.WriteLine("Doctor report");
         Console.WriteLine("-------------");
@@ -98,6 +104,8 @@ public static class AuthCommandModeRunner
         Console.WriteLine($"JWT public key: {jwtOptions.PublicKeyPemPath}");
         Console.WriteLine($"Schema enabled: {schemaOptions.Enabled}");
         Console.WriteLine($"Schema directory: {schemaOptions.DirectoryPath}");
+        Console.WriteLine($"Service auth enabled: {serviceAuthOptions.Enabled}");
+        Console.WriteLine($"Configured service clients: {serviceAuthOptions.Clients.Count}");
 
         var dbOk = await dbContext.Database.CanConnectAsync();
         Console.WriteLine($"Database: {(dbOk ? "OK" : "FAILED")}");
@@ -177,7 +185,7 @@ public static class AuthCommandModeRunner
         return 0;
     }
 
-    private static async Task<int> ExecuteRealmsAsync(IServiceProvider services, string[] args)
+    private static async Task<int> ExecuteRealmsAsync(WebApplication app, IServiceProvider services, string[] args)
     {
         if (args.Length == 0)
         {
@@ -280,10 +288,462 @@ public static class AuthCommandModeRunner
                     return await ExecuteRealmMutationAsync(realmService, dbContext, action, args);
                 }
 
+            case "create-service":
+                {
+                    return await ExecuteRealmCreateServiceAsync(app, services, args.Skip(1).ToArray());
+                }
+
+            case "revoke-service":
+                {
+                    return await ExecuteRealmRevokeServiceAsync(app, services, args.Skip(1).ToArray());
+                }
+
             default:
                 PrintRealmHelp();
                 return 1;
         }
+    }
+
+    private static async Task<int> ExecuteServicesAsync(WebApplication app, IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            PrintServicesHelp();
+            return 1;
+        }
+
+        var options = services.GetRequiredService<IOptions<ServiceAuthOptions>>().Value;
+        var editor = new ServiceAuthConfigEditor(app.Environment);
+        var action = args[0].Trim().ToLowerInvariant();
+
+        switch (action)
+        {
+            case "list":
+                {
+                    foreach (var client in options.Clients.OrderBy(x => x.ServiceId, StringComparer.Ordinal))
+                    {
+                        var allowed = client.AllowedRealmIds.Length == 0
+                            ? "-"
+                            : string.Join(",", client.AllowedRealmIds);
+
+                        Console.WriteLine($"{client.ServiceId} | realms={allowed} | secret={MaskSecret(client.Secret)}");
+                    }
+
+                    return 0;
+                }
+
+            case "show":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services show <serviceId>");
+                        return 1;
+                    }
+
+                    var client = options.Clients.FirstOrDefault(x =>
+                        string.Equals(x.ServiceId, args[1], StringComparison.Ordinal));
+
+                    if (client is null)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    var output = new
+                    {
+                        client.ServiceId,
+                        Secret = MaskSecret(client.Secret),
+                        client.AllowedRealmIds
+                    };
+
+                    Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+                    return 0;
+                }
+
+            case "export":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services export <file>");
+                        return 1;
+                    }
+
+                    var export = new ServiceImportDocument
+                    {
+                        Clients = options.Clients
+                            .OrderBy(x => x.ServiceId, StringComparer.Ordinal)
+                            .Select(x => new ServiceImportClient
+                            {
+                                ServiceId = x.ServiceId,
+                                Secret = x.Secret,
+                                AllowedRealmIds = x.AllowedRealmIds
+                                    .Where(y => !string.IsNullOrWhiteSpace(y))
+                                    .Distinct(StringComparer.Ordinal)
+                                    .OrderBy(y => y, StringComparer.Ordinal)
+                                    .ToArray()
+                            })
+                            .ToList()
+                    };
+
+                    await File.WriteAllTextAsync(args[1], JsonSerializer.Serialize(export, JsonOptions));
+                    Console.WriteLine($"Exported {export.Clients.Count} service client(s) to '{args[1]}'.");
+                    return 0;
+                }
+
+            case "import":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services import <file> [--replace]");
+                        return 1;
+                    }
+
+                    var replace = HasFlag(args, "--replace");
+                    var document = await ReadServiceImportFileAsync(args[1]);
+
+                    var (root, path) = editor.Load();
+                    var clients = editor.GetClients(root);
+
+                    if (replace)
+                    {
+                        clients.Clear();
+                    }
+
+                    foreach (var client in document.Clients
+                        .OrderBy(x => x.ServiceId, StringComparer.Ordinal))
+                    {
+                        if (string.IsNullOrWhiteSpace(client.ServiceId))
+                        {
+                            throw new InvalidOperationException("Imported service contains empty ServiceId.");
+                        }
+
+                        if (string.IsNullOrWhiteSpace(client.Secret))
+                        {
+                            throw new InvalidOperationException($"Imported service '{client.ServiceId}' has empty secret.");
+                        }
+
+                        editor.DeleteClient(root, client.ServiceId);
+                        editor.CreateClient(
+                            root,
+                            client.ServiceId.Trim(),
+                            client.Secret.Trim(),
+                            client.AllowedRealmIds ?? Array.Empty<string>());
+                    }
+
+                    editor.Save(root, path);
+
+                    Console.WriteLine($"Imported {document.Clients.Count} service client(s) into '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            default:
+                PrintServicesHelp();
+                return 1;
+        }
+    }
+
+    private static async Task<int> ExecuteRealmCreateServiceAsync(WebApplication app, IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: command realms create-service <realmId> [--service-id <id>] [--secret <secret>] [--bytes <n>]");
+            return 1;
+        }
+
+        var realmId = args[0].Trim();
+        var dbContext = services.GetRequiredService<AuthDbContext>();
+
+        var realm = await dbContext.Realms.AsNoTracking().FirstOrDefaultAsync(x => x.RealmId == realmId);
+        if (realm is null)
+        {
+            Console.Error.WriteLine($"Realm '{realmId}' was not found.");
+            return 1;
+        }
+
+        var serviceId = GetOption(args, "--service-id")?.Trim();
+        if (string.IsNullOrWhiteSpace(serviceId))
+        {
+            serviceId = GenerateDefaultServiceIdForRealm(realmId);
+        }
+
+        var secret = GetOption(args, "--secret")?.Trim();
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            var byteCount = ParseIntOption(GetOption(args, "--bytes"), 48, min: 16);
+            secret = GenerateSecret(byteCount);
+        }
+
+        var editor = new ServiceAuthConfigEditor(app.Environment);
+        var (root, path) = editor.Load();
+
+        editor.CreateClient(root, serviceId, secret, new[] { realmId });
+        editor.Save(root, path);
+
+        Console.WriteLine($"Created service '{serviceId}' for realm '{realmId}' in '{path}'.");
+        Console.WriteLine($"Secret: {secret}");
+        Console.WriteLine("Restart the Auth service to apply config changes.");
+        return 0;
+    }
+
+    private static async Task<int> ExecuteRealmRevokeServiceAsync(WebApplication app, IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: command realms revoke-service <realmId> [--service-id <id>] [--keep-empty]");
+            return 1;
+        }
+
+        var realmId = args[0].Trim();
+        var specificServiceId = GetOption(args, "--service-id")?.Trim();
+        var keepEmpty = HasFlag(args, "--keep-empty");
+
+        var editor = new ServiceAuthConfigEditor(app.Environment);
+        var (root, path) = editor.Load();
+        var clients = editor.GetClients(root);
+
+        var touchedServices = 0;
+        var deletedServices = 0;
+
+        for (var i = clients.Count - 1; i >= 0; i--)
+        {
+            if (clients[i] is not JsonObject client)
+            {
+                continue;
+            }
+
+            var currentServiceId = client["ServiceId"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(specificServiceId) &&
+                !string.Equals(currentServiceId, specificServiceId, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var allowed = client["AllowedRealmIds"] as JsonArray;
+            if (allowed is null)
+            {
+                continue;
+            }
+
+            var removed = false;
+
+            for (var j = allowed.Count - 1; j >= 0; j--)
+            {
+                var currentRealmId = allowed[j]?.GetValue<string>();
+                if (string.Equals(currentRealmId, realmId, StringComparison.Ordinal))
+                {
+                    allowed.RemoveAt(j);
+                    removed = true;
+                }
+            }
+
+            if (!removed)
+            {
+                continue;
+            }
+
+            touchedServices++;
+
+            if (!keepEmpty && allowed.Count == 0)
+            {
+                clients.RemoveAt(i);
+                deletedServices++;
+            }
+        }
+
+        if (touchedServices == 0)
+        {
+            Console.Error.WriteLine($"No service mapping found for realm '{realmId}'.");
+            return 1;
+        }
+
+        editor.Save(root, path);
+
+        Console.WriteLine($"Revoked realm '{realmId}' from {touchedServices} service(s).");
+        Console.WriteLine($"Deleted empty services: {deletedServices}");
+        Console.WriteLine("Restart the Auth service to apply config changes.");
+        return 0;
+    }
+
+    private static async Task<int> ExecuteSecurityAsync(IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            PrintSecurityHelp();
+            return 1;
+        }
+
+        var category = args[0].Trim().ToLowerInvariant();
+
+        return category switch
+        {
+            "ip-ban" => await ExecuteIpBanAsync(services, args.Skip(1).ToArray()),
+            _ => UnknownSecurityCommand(category)
+        };
+    }
+
+    private static async Task<int> ExecuteIpBanAsync(IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            Console.Error.WriteLine("Usage: command security ip-ban <list|add|remove> ...");
+            return 1;
+        }
+
+        var dbContext = services.GetRequiredService<AuthDbContext>();
+        var action = args[0].Trim().ToLowerInvariant();
+
+        switch (action)
+        {
+            case "list":
+                {
+                    var query = dbContext.BannedIpAddresses.AsNoTracking();
+
+                    if (!HasFlag(args, "--all"))
+                    {
+                        var nowUtc = DateTime.UtcNow;
+                        query = query.Where(x =>
+                            x.Enabled &&
+                            (x.ExpiresAtUtc == null || x.ExpiresAtUtc > nowUtc));
+                    }
+
+                    var items = await query
+                        .OrderBy(x => x.IpAddress)
+                        .ToListAsync();
+
+                    foreach (var item in items)
+                    {
+                        var expires = item.ExpiresAtUtc?.ToString("u") ?? "never";
+                        Console.WriteLine($"{item.IpAddress} | enabled={item.Enabled} | expires={expires} | reason={item.Reason ?? "-"}");
+                    }
+
+                    return 0;
+                }
+
+            case "add":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command security ip-ban add <ip> [--reason <text>] [--hours <n>]");
+                        return 1;
+                    }
+
+                    var ip = args[1].Trim();
+                    if (!IPAddress.TryParse(ip, out _))
+                    {
+                        Console.Error.WriteLine($"Invalid IP address: {ip}");
+                        return 1;
+                    }
+
+                    var reason = GetOption(args, "--reason")?.Trim();
+                    var hours = ParseIntOption(GetOption(args, "--hours"), 0, min: 0);
+                    DateTime? expiresAtUtc = hours > 0 ? DateTime.UtcNow.AddHours(hours) : null;
+
+                    var existing = await dbContext.BannedIpAddresses.FirstOrDefaultAsync(x => x.IpAddress == ip);
+                    if (existing is null)
+                    {
+                        existing = new BannedIpAddress
+                        {
+                            IpAddress = ip,
+                            Reason = reason,
+                            Enabled = true,
+                            CreatedAtUtc = DateTime.UtcNow,
+                            ExpiresAtUtc = expiresAtUtc
+                        };
+
+                        dbContext.BannedIpAddresses.Add(existing);
+                    }
+                    else
+                    {
+                        existing.Reason = reason;
+                        existing.Enabled = true;
+                        existing.ExpiresAtUtc = expiresAtUtc;
+                    }
+
+                    await dbContext.SaveChangesAsync();
+
+                    Console.WriteLine($"IP '{ip}' added to denylist.");
+                    return 0;
+                }
+
+            case "remove":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command security ip-ban remove <ip>");
+                        return 1;
+                    }
+
+                    var ip = args[1].Trim();
+                    var items = await dbContext.BannedIpAddresses
+                        .Where(x => x.IpAddress == ip)
+                        .ToListAsync();
+
+                    if (items.Count == 0)
+                    {
+                        Console.Error.WriteLine($"IP '{ip}' is not in the denylist.");
+                        return 1;
+                    }
+
+                    dbContext.BannedIpAddresses.RemoveRange(items);
+                    await dbContext.SaveChangesAsync();
+
+                    Console.WriteLine($"IP '{ip}' removed from denylist.");
+                    return 0;
+                }
+
+            default:
+                Console.Error.WriteLine("Usage: command security ip-ban <list|add|remove> ...");
+                return 1;
+        }
+    }
+
+    private static async Task<ServiceImportDocument> ReadServiceImportFileAsync(string path)
+    {
+        if (!File.Exists(path))
+        {
+            throw new InvalidOperationException($"File was not found: {path}");
+        }
+
+        var json = await File.ReadAllTextAsync(path);
+        var document = JsonSerializer.Deserialize<ServiceImportDocument>(json, JsonOptions);
+
+        if (document is null)
+        {
+            throw new InvalidOperationException("Service import file could not be deserialized.");
+        }
+
+        document.Clients ??= new List<ServiceImportClient>();
+        return document;
+    }
+
+    private static string GenerateDefaultServiceIdForRealm(string realmId)
+    {
+        return $"realm-{realmId}";
+    }
+
+    private static string GenerateSecret(int byteCount)
+    {
+        var bytes = RandomNumberGenerator.GetBytes(byteCount);
+        return Convert.ToBase64String(bytes)
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+    }
+
+    private static string MaskSecret(string secret)
+    {
+        if (string.IsNullOrWhiteSpace(secret))
+        {
+            return "(empty)";
+        }
+
+        if (secret.Length <= 6)
+        {
+            return new string('*', secret.Length);
+        }
+
+        return $"{secret[..3]}***{secret[^3..]}";
     }
 
     private static async Task<int> ExecuteRealmMutationAsync(
@@ -298,18 +758,28 @@ public static class AuthCommandModeRunner
             return 1;
         }
 
-        if ((action is "quarantine" or "restore") && args.Length < 2)
+        if ((action is "quarantine" or "restore" or "hide" or "unhide" or "enable" or "disable" or "mark-offline") && args.Length < 2)
         {
             Console.Error.WriteLine($"Usage: command realms {action} <realmId>");
             return 1;
         }
 
         var realmId = args[1];
-        var existing = await dbContext.Realms.AsNoTracking().FirstOrDefaultAsync(x => x.RealmId == realmId);
+        var existing = await dbContext.Realms.FirstOrDefaultAsync(x => x.RealmId == realmId);
         if (existing is null)
         {
             Console.Error.WriteLine($"Realm '{realmId}' was not found.");
             return 1;
+        }
+
+        if (action == "mark-offline")
+        {
+            existing.Status = "offline";
+            existing.UpdatedAt = DateTime.UtcNow;
+            await dbContext.SaveChangesAsync();
+
+            Console.WriteLine($"Realm '{realmId}' status set to offline.");
+            return 0;
         }
 
         var request = new AdminRealmUpsertRequest
@@ -348,6 +818,22 @@ public static class AuthCommandModeRunner
                 request.IsListed = true;
                 request.Enabled = true;
                 break;
+
+            case "hide":
+                request.IsListed = false;
+                break;
+
+            case "unhide":
+                request.IsListed = true;
+                break;
+
+            case "enable":
+                request.Enabled = true;
+                break;
+
+            case "disable":
+                request.Enabled = false;
+                break;
         }
 
         var updated = await realmService.UpdateRealmAsync(realmId, request);
@@ -359,6 +845,284 @@ public static class AuthCommandModeRunner
 
         Console.WriteLine($"Updated realm '{realmId}' via '{action}'.");
         return 0;
+    }
+
+    private static int ExecuteServices(WebApplication app, IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0)
+        {
+            PrintServicesHelp();
+            return 1;
+        }
+
+        var options = services.GetRequiredService<IOptions<ServiceAuthOptions>>().Value;
+        var editor = new ServiceAuthConfigEditor(app.Environment);
+        var action = args[0].Trim().ToLowerInvariant();
+
+        switch (action)
+        {
+            case "list":
+                {
+                    foreach (var client in options.Clients.OrderBy(x => x.ServiceId, StringComparer.Ordinal))
+                    {
+                        var allowed = client.AllowedRealmIds.Length == 0
+                            ? "-"
+                            : string.Join(",", client.AllowedRealmIds);
+
+                        Console.WriteLine($"{client.ServiceId} | realms={allowed} | secret={MaskSecret(client.Secret)}");
+                    }
+
+                    return 0;
+                }
+
+            case "show":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services show <serviceId>");
+                        return 1;
+                    }
+
+                    var client = options.Clients.FirstOrDefault(x =>
+                        string.Equals(x.ServiceId, args[1], StringComparison.Ordinal));
+
+                    if (client is null)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    var output = new
+                    {
+                        client.ServiceId,
+                        Secret = MaskSecret(client.Secret),
+                        client.AllowedRealmIds
+                    };
+
+                    Console.WriteLine(JsonSerializer.Serialize(output, JsonOptions));
+                    return 0;
+                }
+
+            case "validate":
+                {
+                    var errors = new List<string>();
+                    var warnings = new List<string>();
+
+                    var duplicateServiceIds = options.Clients
+                        .GroupBy(x => x.ServiceId, StringComparer.Ordinal)
+                        .Where(x => !string.IsNullOrWhiteSpace(x.Key) && x.Count() > 1)
+                        .Select(x => x.Key)
+                        .OrderBy(x => x, StringComparer.Ordinal)
+                        .ToList();
+
+                    foreach (var serviceId in duplicateServiceIds)
+                    {
+                        errors.Add($"Duplicate service id: {serviceId}");
+                    }
+
+                    foreach (var client in options.Clients)
+                    {
+                        if (string.IsNullOrWhiteSpace(client.ServiceId))
+                        {
+                            errors.Add("One service client has an empty ServiceId.");
+                        }
+
+                        if (string.IsNullOrWhiteSpace(client.Secret))
+                        {
+                            errors.Add($"Service '{client.ServiceId}' has an empty secret.");
+                        }
+
+                        if (client.AllowedRealmIds.Length == 0)
+                        {
+                            warnings.Add($"Service '{client.ServiceId}' has no AllowedRealmIds.");
+                        }
+
+                        var duplicateRealms = client.AllowedRealmIds
+                            .GroupBy(x => x, StringComparer.Ordinal)
+                            .Where(x => !string.IsNullOrWhiteSpace(x.Key) && x.Count() > 1)
+                            .Select(x => x.Key)
+                            .OrderBy(x => x, StringComparer.Ordinal)
+                            .ToList();
+
+                        foreach (var realmId in duplicateRealms)
+                        {
+                            errors.Add($"Service '{client.ServiceId}' contains duplicate allowed realm id '{realmId}'.");
+                        }
+                    }
+
+                    if (errors.Count == 0)
+                    {
+                        Console.WriteLine("Service auth config is valid.");
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine("Service auth config is INVALID:");
+                        foreach (var error in errors)
+                        {
+                            Console.Error.WriteLine($"  - {error}");
+                        }
+                    }
+
+                    if (warnings.Count > 0)
+                    {
+                        Console.WriteLine("Warnings:");
+                        foreach (var warning in warnings)
+                        {
+                            Console.WriteLine($"  - {warning}");
+                        }
+                    }
+
+                    return errors.Count == 0 ? 0 : 1;
+                }
+
+            case "create":
+                {
+                    var serviceId = GetOption(args, "--service-id");
+                    if (string.IsNullOrWhiteSpace(serviceId))
+                    {
+                        Console.Error.WriteLine("Usage: command services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>]");
+                        return 1;
+                    }
+
+                    var secret = GetOption(args, "--secret");
+                    if (string.IsNullOrWhiteSpace(secret))
+                    {
+                        var byteCount = ParseIntOption(GetOption(args, "--bytes"), 48, min: 16);
+                        secret = GenerateSecret(byteCount);
+                    }
+
+                    var firstRealm = GetOption(args, "--realm");
+                    var allowed = string.IsNullOrWhiteSpace(firstRealm)
+                        ? Array.Empty<string>()
+                        : new[] { firstRealm.Trim() };
+
+                    var (root, path) = editor.Load();
+                    editor.CreateClient(root, serviceId.Trim(), secret, allowed);
+                    editor.Save(root, path);
+
+                    Console.WriteLine($"Created service '{serviceId}' in '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            case "delete":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services delete <serviceId>");
+                        return 1;
+                    }
+
+                    var (root, path) = editor.Load();
+                    var deleted = editor.DeleteClient(root, args[1]);
+                    if (!deleted)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    editor.Save(root, path);
+                    Console.WriteLine($"Deleted service '{args[1]}' from '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            case "add-realm":
+                {
+                    if (args.Length < 3)
+                    {
+                        Console.Error.WriteLine("Usage: command services add-realm <serviceId> <realmId>");
+                        return 1;
+                    }
+
+                    var (root, path) = editor.Load();
+                    var ok = editor.AddRealm(root, args[1], args[2]);
+                    if (!ok)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    editor.Save(root, path);
+                    Console.WriteLine($"Added realm '{args[2]}' to service '{args[1]}' in '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            case "remove-realm":
+                {
+                    if (args.Length < 3)
+                    {
+                        Console.Error.WriteLine("Usage: command services remove-realm <serviceId> <realmId>");
+                        return 1;
+                    }
+
+                    var (root, path) = editor.Load();
+                    var ok = editor.RemoveRealm(root, args[1], args[2]);
+                    if (!ok)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    editor.Save(root, path);
+                    Console.WriteLine($"Removed realm '{args[2]}' from service '{args[1]}' in '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            case "set-secret":
+                {
+                    if (args.Length < 3)
+                    {
+                        Console.Error.WriteLine("Usage: command services set-secret <serviceId> <secret>");
+                        return 1;
+                    }
+
+                    var (root, path) = editor.Load();
+                    var ok = editor.SetSecret(root, args[1], args[2]);
+                    if (!ok)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    editor.Save(root, path);
+                    Console.WriteLine($"Updated secret for service '{args[1]}' in '{path}'.");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            case "rotate-secret":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command services rotate-secret <serviceId> [--bytes <n>]");
+                        return 1;
+                    }
+
+                    var byteCount = ParseIntOption(GetOption(args, "--bytes"), 48, min: 16);
+                    var newSecret = GenerateSecret(byteCount);
+
+                    var (root, path) = editor.Load();
+                    var ok = editor.SetSecret(root, args[1], newSecret);
+                    if (!ok)
+                    {
+                        Console.Error.WriteLine($"Service '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    editor.Save(root, path);
+                    Console.WriteLine($"Rotated secret for service '{args[1]}' in '{path}'.");
+                    Console.WriteLine($"New secret: {newSecret}");
+                    Console.WriteLine("Restart the Auth service to apply config changes.");
+                    return 0;
+                }
+
+            default:
+                PrintServicesHelp();
+                return 1;
+        }
     }
 
     private static async Task<int> ExecuteGameDataAsync(IServiceProvider services, string[] args)
@@ -468,6 +1232,25 @@ public static class AuthCommandModeRunner
                     }
 
                     Console.WriteLine(JsonSerializer.Serialize(migration, JsonOptions));
+                    return 0;
+                }
+
+            case "cat":
+                {
+                    if (args.Length < 2)
+                    {
+                        Console.Error.WriteLine("Usage: command schema cat <migrationId>");
+                        return 1;
+                    }
+
+                    var migration = await schemaService.GetMigrationAsync(args[1]);
+                    if (migration is null)
+                    {
+                        Console.Error.WriteLine($"Migration '{args[1]}' was not found.");
+                        return 1;
+                    }
+
+                    Console.WriteLine(migration.Sql);
                     return 0;
                 }
 
@@ -631,6 +1414,15 @@ public static class AuthCommandModeRunner
         return request;
     }
 
+    private static void PrintRealmRows(IEnumerable<Realm> realms)
+    {
+        foreach (var realm in realms)
+        {
+            var lastHeartbeat = realm.LastHeartbeatAt?.ToString("u") ?? "-";
+            Console.WriteLine($"{realm.RealmId} | {realm.DisplayName} | official={realm.IsOfficial} | listed={realm.IsListed} | enabled={realm.Enabled} | status={realm.Status} | players={realm.CurrentPlayers}/{realm.MaxPlayers} | lastHeartbeat={lastHeartbeat}");
+        }
+    }
+
     private static string? GetOption(string[] args, string optionName)
     {
         for (var i = 0; i < args.Length - 1; i++)
@@ -644,6 +1436,11 @@ public static class AuthCommandModeRunner
         return null;
     }
 
+    private static bool HasFlag(string[] args, string flag)
+    {
+        return args.Any(x => string.Equals(x, flag, StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool ParseBool(string value, string optionName)
     {
         if (bool.TryParse(value, out var parsed))
@@ -652,6 +1449,21 @@ public static class AuthCommandModeRunner
         }
 
         throw new InvalidOperationException($"Option '{optionName}' must be 'true' or 'false'.");
+    }
+
+    private static int ParseIntOption(string? rawValue, int defaultValue, int min)
+    {
+        if (string.IsNullOrWhiteSpace(rawValue))
+        {
+            return defaultValue;
+        }
+
+        if (!int.TryParse(rawValue, out var parsed) || parsed < min)
+        {
+            throw new InvalidOperationException($"Integer option must be >= {min}.");
+        }
+
+        return parsed;
     }
 
     private static int UnknownCommand(string category)
@@ -676,14 +1488,18 @@ public static class AuthCommandModeRunner
         Console.WriteLine("  db ping|realms-count|accounts-count");
         Console.WriteLine("  jwt check");
         Console.WriteLine("  environment info");
-        Console.WriteLine("  realms list|show|stats|create|update|set-official|set-listed|set-enabled|quarantine|restore");
+        Console.WriteLine("  realms list|show|stats|create|update|set-official|set-listed|set-enabled|quarantine|restore|create-service|revoke-service");
+        Console.WriteLine("  services list|show|export|import");
         Console.WriteLine("  gamedata version|export|validate|replace");
         Console.WriteLine("  schema list|show|manifest|validate");
+        Console.WriteLine("  security ip-ban list|add|remove");
         Console.WriteLine();
 
         PrintRealmHelp();
+        PrintServicesHelp();
         PrintGameDataHelp();
         PrintSchemaHelp();
+        PrintSecurityHelp();
     }
 
     private static void PrintRealmHelp()
@@ -699,6 +1515,23 @@ public static class AuthCommandModeRunner
         Console.WriteLine("  command realms set-enabled <realmId> <true|false>");
         Console.WriteLine("  command realms quarantine <realmId>");
         Console.WriteLine("  command realms restore <realmId>");
+        Console.WriteLine("  command realms create-service <realmId> [--service-id <id>] [--secret <secret>] [--bytes <n>]");
+        Console.WriteLine("  command realms revoke-service <realmId> [--service-id <id>] [--keep-empty]");
+        Console.WriteLine();
+    }
+
+    private static void PrintServicesHelp()
+    {
+        Console.WriteLine("Services:");
+        Console.WriteLine("  command services list");
+        Console.WriteLine("  command services show <serviceId>");
+        Console.WriteLine("  command services validate");
+        Console.WriteLine("  command services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>]");
+        Console.WriteLine("  command services delete <serviceId>");
+        Console.WriteLine("  command services add-realm <serviceId> <realmId>");
+        Console.WriteLine("  command services remove-realm <serviceId> <realmId>");
+        Console.WriteLine("  command services set-secret <serviceId> <secret>");
+        Console.WriteLine("  command services rotate-secret <serviceId> [--bytes <n>]");
         Console.WriteLine();
     }
 
@@ -717,8 +1550,37 @@ public static class AuthCommandModeRunner
         Console.WriteLine("Schema:");
         Console.WriteLine("  command schema list");
         Console.WriteLine("  command schema show <migrationId>");
+        Console.WriteLine("  command schema cat <migrationId>");
         Console.WriteLine("  command schema manifest");
         Console.WriteLine("  command schema validate");
         Console.WriteLine();
+    }
+
+    private static void PrintSecurityHelp()
+    {
+        Console.WriteLine("Security:");
+        Console.WriteLine("  command security ip-ban list [--all]");
+        Console.WriteLine("  command security ip-ban add <ip> [--reason <text>] [--hours <n>]");
+        Console.WriteLine("  command security ip-ban remove <ip>");
+        Console.WriteLine();
+    }
+
+    private static int UnknownSecurityCommand(string category)
+    {
+        Console.Error.WriteLine($"Unknown security category '{category}'.");
+        PrintSecurityHelp();
+        return 1;
+    }
+
+    private sealed class ServiceImportDocument
+    {
+        public List<ServiceImportClient> Clients { get; set; } = new();
+    }
+
+    private sealed class ServiceImportClient
+    {
+        public string ServiceId { get; set; } = string.Empty;
+        public string Secret { get; set; } = string.Empty;
+        public string[] AllowedRealmIds { get; set; } = Array.Empty<string>();
     }
 }
