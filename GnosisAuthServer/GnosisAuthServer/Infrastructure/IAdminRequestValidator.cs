@@ -2,5 +2,5 @@ namespace GnosisAuthServer.Infrastructure;
 
 public interface IAdminRequestValidator
 {
-    bool TryAuthorize(HttpRequest request, out string error);
+    Task<AdminAuthorizationResult> AuthorizeAsync(HttpRequest request, CancellationToken cancellationToken);
 }
