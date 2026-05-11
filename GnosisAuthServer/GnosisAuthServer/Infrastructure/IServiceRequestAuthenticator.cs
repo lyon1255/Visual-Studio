@@ -2,5 +2,5 @@ namespace GnosisAuthServer.Infrastructure;
 
 public interface IServiceRequestAuthenticator
 {
-    bool TryAuthenticate(HttpRequest request, out ServiceAuthContext? context, out string error);
+    Task<bool> TryAuthenticateAsync(HttpRequest request, CancellationToken cancellationToken, out ServiceAuthContext? context, out string error);
 }
