@@ -12,6 +12,8 @@ public sealed class AdminOptions
 
     public string[] AllowedIpAddresses { get; set; } = Array.Empty<string>();
 
+    public string[] AllowedIpNetworks { get; set; } = Array.Empty<string>();
+
     public bool RequireHmac { get; set; } = true;
 
     public int AllowedClockSkewSeconds { get; set; } = 30;
