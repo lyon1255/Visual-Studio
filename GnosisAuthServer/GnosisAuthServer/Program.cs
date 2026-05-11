@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
@@ -32,6 +33,8 @@ builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOpt
 builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection(AdminOptions.SectionName));
 builder.Services.Configure<SchemaDeliveryOptions>(builder.Configuration.GetSection(SchemaDeliveryOptions.SectionName));
 builder.Services.Configure<GameDataOptions>(builder.Configuration.GetSection(GameDataOptions.SectionName));
+builder.Services.Configure<AccountAccessOptions>(builder.Configuration.GetSection(AccountAccessOptions.SectionName));
+builder.Services.Configure<NonceStoreOptions>(builder.Configuration.GetSection(NonceStoreOptions.SectionName));
 
 var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
     ?? throw new InvalidOperationException("Database configuration is missing.");
@@ -65,6 +68,7 @@ var rsaKeyProvider = new FileRsaKeyProvider(Options.Create(jwtOptions));
 builder.Services.AddSingleton<IRsaKeyProvider>(rsaKeyProvider);
 
 builder.Services.AddMemoryCache();
+builder.Services.AddDistributedMemoryCache();
 builder.Services.AddSingleton<MemoryCache>(_ =>
     new MemoryCache(new MemoryCacheOptions
     {
@@ -78,7 +82,15 @@ builder.Services.AddScoped<IGameDataService, GameDataService>();
 builder.Services.AddScoped<IAccountAccessValidator, CachedAccountAccessValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
 builder.Services.AddSingleton<INonceStore>(sp =>
-    new MemoryNonceStore(sp.GetRequiredService<MemoryCache>()));
+{
+    var nonceStoreOptions = sp.GetRequiredService<IOptions<NonceStoreOptions>>().Value;
+    if (nonceStoreOptions.UseDistributedCache)
+    {
+        return new DistributedNonceStore(sp.GetRequiredService<IDistributedCache>());
+    }
+
+    return new MemoryNonceStore(sp.GetRequiredService<MemoryCache>());
+});
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<IIpBanCacheService, IpBanCacheService>();
@@ -161,7 +173,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("realm-heartbeat", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: GetServicePartitionKey(context),
+            partitionKey: GetPreAuthPartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 12,
@@ -172,7 +184,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("realm-gamedata-read", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: GetServicePartitionKey(context),
+            partitionKey: GetPreAuthPartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 60,
@@ -183,7 +195,7 @@ builder.Services.AddRateLimiter(options =>
 
     options.AddPolicy("realm-schema-read", context =>
         RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: GetServicePartitionKey(context),
+            partitionKey: GetPreAuthPartitionKey(context),
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 30,
@@ -317,10 +329,11 @@ app.MapControllers();
 
 app.Run();
 
-static string GetServicePartitionKey(HttpContext context)
+static string GetPreAuthPartitionKey(HttpContext context)
 {
-    var serviceId = context.Request.Headers[ServiceAuthHeaderNames.ServiceId].ToString();
-    return string.IsNullOrWhiteSpace(serviceId) ? "unknown" : serviceId;
+    var remoteIp = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+    var path = context.Request.Path.HasValue ? context.Request.Path.Value! : "/";
+    return $"{remoteIp}:{path}";
 }
 
 static async Task ValidateStartupAsync(WebApplication app)
