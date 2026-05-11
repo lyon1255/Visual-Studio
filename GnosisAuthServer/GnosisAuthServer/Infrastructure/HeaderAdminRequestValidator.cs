@@ -33,9 +33,12 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
             return AdminAuthorizationResult.Failure("Admin API is disabled.");
         }
 
-        if (_environment.IsProduction() && _options.RequireExplicitIpAllowlistInProduction && _options.AllowedIpAddresses.Length == 0)
+        if (_environment.IsProduction()
+            && _options.RequireExplicitIpAllowlistInProduction
+            && _options.AllowedIpAddresses.Length == 0
+            && _options.AllowedIpNetworks.Length == 0)
         {
-            _logger.LogError("Admin authorization rejected because no explicit IP allowlist is configured in production.");
+            _logger.LogError("Admin authorization rejected because no explicit IP or network allowlist is configured in production.");
             return AdminAuthorizationResult.Failure("Admin IP allowlist is required in production.");
         }
 
@@ -162,7 +165,7 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
 
     private bool RequestIpAllowed(HttpRequest request)
     {
-        if (_options.AllowedIpAddresses.Length == 0)
+        if (_options.AllowedIpAddresses.Length == 0 && _options.AllowedIpNetworks.Length == 0)
         {
             return true;
         }
@@ -173,7 +176,13 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
             return false;
         }
 
-        return _options.AllowedIpAddresses.Any(x => IPAddress.TryParse(x, out var allowed) && allowed.Equals(remoteIp));
+        var ipMatch = _options.AllowedIpAddresses.Any(x => IPAddress.TryParse(x, out var allowed) && allowed.Equals(remoteIp));
+        if (ipMatch)
+        {
+            return true;
+        }
+
+        return _options.AllowedIpNetworks.Any(x => IPNetwork.TryParse(x, out var network) && network.Contains(remoteIp));
     }
 
     private static async Task<string> ComputeBodyHashAsync(HttpRequest request, CancellationToken cancellationToken)
