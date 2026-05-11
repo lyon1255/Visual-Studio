@@ -1,4 +1,3 @@
-using Gnosis.AuthServer.Application.Services;
 using GnosisAuthServer.CommandMode;
 using GnosisAuthServer.CommandMode.Modules;
 using GnosisAuthServer.Data;
@@ -63,7 +62,10 @@ builder.Services.AddDbContext<AuthDbContext>(options =>
 var rsaKeyProvider = new FileRsaKeyProvider(Options.Create(jwtOptions));
 builder.Services.AddSingleton<IRsaKeyProvider>(rsaKeyProvider);
 
-builder.Services.AddMemoryCache();
+builder.Services.AddMemoryCache(options =>
+{
+    options.SizeLimit = 10_000;
+});
 
 builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
@@ -73,6 +75,7 @@ builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
+builder.Services.AddSingleton<IIpBanCacheService, IpBanCacheService>();
 
 builder.Services.AddSingleton<IAuthCommandModule, VersionCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, DoctorCommandModule>();
@@ -267,15 +270,8 @@ app.Use(async (context, next) =>
     var remoteIp = context.Connection.RemoteIpAddress?.ToString();
     if (!string.IsNullOrWhiteSpace(remoteIp))
     {
-        var dbContext = context.RequestServices.GetRequiredService<AuthDbContext>();
-        var nowUtc = DateTime.UtcNow;
-
-        var isBlocked = await dbContext.BannedIpAddresses
-            .AsNoTracking()
-            .AnyAsync(x =>
-                x.Enabled &&
-                x.IpAddress == remoteIp &&
-                (x.ExpiresAtUtc == null || x.ExpiresAtUtc > nowUtc));
+        var ipBanCache = context.RequestServices.GetRequiredService<IIpBanCacheService>();
+        var isBlocked = await ipBanCache.IsBlockedAsync(remoteIp, context.RequestAborted);
 
         if (isBlocked)
         {

@@ -1,4 +1,5 @@
 ﻿using GnosisAuthServer.Data;
+using GnosisAuthServer.Services;
 using Microsoft.EntityFrameworkCore;
 using System.Net;
 
@@ -39,6 +40,7 @@ internal sealed class SecurityCommandModule : IAuthCommandModule
         }
 
         var dbContext = context.Services.GetRequiredService<AuthDbContext>();
+        var ipBanCache = context.Services.GetRequiredService<IIpBanCacheService>();
         var action = args[0].Trim().ToLowerInvariant();
 
         switch (action)
@@ -123,6 +125,7 @@ internal sealed class SecurityCommandModule : IAuthCommandModule
                     }
 
                     await dbContext.SaveChangesAsync();
+                    ipBanCache.Invalidate(ip);
 
                     Console.WriteLine($"IP '{ip}' added to denylist.");
                     return 0;
@@ -149,6 +152,7 @@ internal sealed class SecurityCommandModule : IAuthCommandModule
 
                     dbContext.BannedIpAddresses.RemoveRange(items);
                     await dbContext.SaveChangesAsync();
+                    ipBanCache.Invalidate(ip);
 
                     Console.WriteLine($"IP '{ip}' removed from denylist.");
                     return 0;
