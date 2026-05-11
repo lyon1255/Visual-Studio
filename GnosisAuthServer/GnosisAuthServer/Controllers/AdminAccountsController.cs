@@ -15,15 +15,18 @@ public sealed class AdminAccountsController : ControllerBase
     private readonly IAdminRequestValidator _adminRequestValidator;
     private readonly IAccountAccessValidator _accountAccessValidator;
     private readonly AuthDbContext _dbContext;
+    private readonly ILogger<AdminAccountsController> _logger;
 
     public AdminAccountsController(
         IAdminRequestValidator adminRequestValidator,
         IAccountAccessValidator accountAccessValidator,
-        AuthDbContext dbContext)
+        AuthDbContext dbContext,
+        ILogger<AdminAccountsController> logger)
     {
         _adminRequestValidator = adminRequestValidator;
         _accountAccessValidator = accountAccessValidator;
         _dbContext = dbContext;
+        _logger = logger;
     }
 
     [HttpPut("ban")]
@@ -45,6 +48,7 @@ public sealed class AdminAccountsController : ControllerBase
         var account = await _dbContext.Accounts.FirstOrDefaultAsync(x => x.SteamId == steamId, cancellationToken);
         if (account is null)
         {
+            _logger.LogWarning("Admin account ban update rejected because account was not found. SteamId={SteamId}", steamId);
             return NotFound(new { error = "Account was not found." });
         }
 
@@ -55,6 +59,11 @@ public sealed class AdminAccountsController : ControllerBase
 
         await _dbContext.SaveChangesAsync(cancellationToken);
         _accountAccessValidator.Invalidate(account.SteamId);
+
+        _logger.LogInformation("Admin account ban status updated. SteamId={SteamId} IsBanned={IsBanned} Reason={Reason}",
+            account.SteamId,
+            account.IsBanned,
+            account.BanReason ?? string.Empty);
 
         return Ok(new
         {
