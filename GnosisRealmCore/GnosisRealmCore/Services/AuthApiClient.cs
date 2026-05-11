@@ -55,9 +55,14 @@ public sealed class AuthApiClient : IAuthApiClient
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString();
         var nonce = Guid.NewGuid().ToString("N");
 
+        using var requestMessage = new HttpRequestMessage(method, relativePath);
+        var requestPath = requestMessage.RequestUri?.AbsolutePath ?? relativePath;
+        var requestQuery = requestMessage.RequestUri?.Query ?? string.Empty;
+
         var canonical = string.Join("\n",
             method.Method.ToUpperInvariant(),
-            relativePath,
+            requestPath,
+            requestQuery,
             timestamp,
             nonce,
             bodyHashHex);
@@ -65,7 +70,6 @@ public sealed class AuthApiClient : IAuthApiClient
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(_options.ServiceSecret));
         var signatureHex = Convert.ToHexString(hmac.ComputeHash(Encoding.UTF8.GetBytes(canonical))).ToLowerInvariant();
 
-        using var requestMessage = new HttpRequestMessage(method, relativePath);
         requestMessage.Headers.Add(ServiceAuthHeaderNames.ServiceId, _options.ServiceId);
         requestMessage.Headers.Add(ServiceAuthHeaderNames.Timestamp, timestamp);
         requestMessage.Headers.Add(ServiceAuthHeaderNames.Nonce, nonce);
