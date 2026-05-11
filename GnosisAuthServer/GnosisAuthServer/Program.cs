@@ -155,17 +155,6 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             }));
 
-    options.AddPolicy("realm-schema-read", context =>
-        RateLimitPartition.GetFixedWindowLimiter(
-            partitionKey: GetServicePartitionKey(context),
-            factory: _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = 60,
-                Window = TimeSpan.FromMinutes(1),
-                QueueLimit = 0,
-                AutoReplenishment = true
-            }));
-
     options.AddPolicy("admin-write", context =>
         RateLimitPartition.GetFixedWindowLimiter(
             partitionKey: context.Connection.RemoteIpAddress?.ToString() ?? "unknown",

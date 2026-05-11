@@ -46,7 +46,8 @@ public static class AuthCommandModeRunner
                 return 1;
             }
 
-            return await module.ExecuteAsync(context, category, commandArgs.Skip(1).ToArray());
+
+            return await module.ExecuteAsync(context, category, [.. commandArgs.Skip(1)]);
         }
         catch (Exception ex)
         {
