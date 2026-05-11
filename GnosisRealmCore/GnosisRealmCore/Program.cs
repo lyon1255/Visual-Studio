@@ -21,7 +21,6 @@ builder.Services.Configure<LegacyNodeAuthOptions>(builder.Configuration.GetSecti
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.Configure<RealmOptions>(builder.Configuration.GetSection(RealmOptions.SectionName));
-builder.Services.Configure<SchemaMigrationOptions>(builder.Configuration.GetSection(SchemaMigrationOptions.SectionName));
 builder.Services.Configure<GameDataCacheOptions>(builder.Configuration.GetSection(GameDataCacheOptions.SectionName));
 
 var connectionString = builder.Configuration.GetSection(DatabaseOptions.SectionName)["ConnectionString"]
@@ -67,7 +66,6 @@ builder.Services.AddScoped<IZoneOrchestrationService, ZoneOrchestrationService>(
 
 builder.Services.AddSingleton<IAuthApiClient, AuthApiClient>();
 builder.Services.AddSingleton<IGameDataCacheService, GameDataCacheService>();
-builder.Services.AddSingleton<ISchemaMigrationService, SchemaMigrationService>();
 
 builder.Services.AddHostedService<RealmHeartbeatHostedService>();
 
@@ -107,9 +105,6 @@ app.UseCors("realm-public");
 
 await using (var scope = app.Services.CreateAsyncScope())
 {
-    var migrator = scope.ServiceProvider.GetRequiredService<ISchemaMigrationService>();
-    await migrator.ApplyPendingMigrationsAsync();
-
     var cache = scope.ServiceProvider.GetRequiredService<IGameDataCacheService>();
     await cache.WarmAsync(CancellationToken.None);
 }
