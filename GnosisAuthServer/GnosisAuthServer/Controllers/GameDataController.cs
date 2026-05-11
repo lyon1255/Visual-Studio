@@ -78,9 +78,10 @@ public sealed class GameDataController : ControllerBase
     [HttpGet("api/admin/gamedata/snapshot")]
     public async Task<IActionResult> GetSnapshotForAdmin(CancellationToken cancellationToken)
     {
-        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        var authResult = await _adminRequestValidator.AuthorizeAsync(Request, cancellationToken);
+        if (!authResult.IsAuthorized)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         return Ok(await _gameDataService.GetCurrentSnapshotAsync(cancellationToken));
@@ -90,9 +91,10 @@ public sealed class GameDataController : ControllerBase
     [EnableRateLimiting("admin-write")]
     public async Task<IActionResult> ReplaceSnapshot([FromBody] ReplaceGlobalGameDataRequest request, CancellationToken cancellationToken)
     {
-        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        var authResult = await _adminRequestValidator.AuthorizeAsync(Request, cancellationToken);
+        if (!authResult.IsAuthorized)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         if (!ModelState.IsValid)
