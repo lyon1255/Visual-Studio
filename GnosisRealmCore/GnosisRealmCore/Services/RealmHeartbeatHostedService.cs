@@ -14,6 +14,8 @@ public sealed class RealmHeartbeatHostedService : BackgroundService
     private readonly AuthApiOptions _authApiOptions;
     private readonly ILogger<RealmHeartbeatHostedService> _logger;
 
+    private DateTime? _lastHealthyZoneSeenUtc;
+
     public RealmHeartbeatHostedService(
         IServiceScopeFactory scopeFactory,
         IAuthApiClient authApiClient,
@@ -42,43 +44,7 @@ public sealed class RealmHeartbeatHostedService : BackgroundService
         {
             try
             {
-                await using var scope = _scopeFactory.CreateAsyncScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<RealmDbContext>();
-
-                var now = DateTime.UtcNow;
-                var healthyCutoff = now.AddSeconds(-Math.Max(30, _authApiOptions.HeartbeatIntervalSeconds * 2));
-
-                var healthyZones = await dbContext.RealmZoneInstances
-                    .AsNoTracking()
-                    .Where(x => x.LastHeartbeatUtc != null &&
-                                x.LastHeartbeatUtc >= healthyCutoff &&
-                                x.Status == "online")
-                    .ToListAsync(stoppingToken);
-
-                var currentPlayers = healthyZones.Sum(x => x.CurrentPlayers);
-                var healthyZoneCount = healthyZones.Count;
-
-                var realmType = string.Equals(_realmOptions.Kind, "official", StringComparison.OrdinalIgnoreCase)
-                    ? "official"
-                    : "community";
-
-                var status = healthyZoneCount > 0 ? "online" : "idle";
-
-                await _authApiClient.SendRealmHeartbeatAsync(new RealmHeartbeatRequest
-                {
-                    RealmId = _realmOptions.RealmId,
-                    RealmName = _realmOptions.DisplayName,
-                    RealmType = realmType,
-                    Region = _realmOptions.Region,
-                    Status = status,
-                    CurrentPlayers = currentPlayers,
-                    MaxPlayers = _realmOptions.MaxPlayers,
-                    HealthyZoneCount = healthyZoneCount,
-                    PublicBaseUrl = _realmOptions.PublicBaseUrl,
-                    Motd = null,
-                    Version = null,
-                    Modded = realmType == "community"
-                }, stoppingToken);
+                await SendHeartbeatOnceAsync(stoppingToken);
             }
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested)
             {
@@ -89,5 +55,73 @@ public sealed class RealmHeartbeatHostedService : BackgroundService
                 TimeSpan.FromSeconds(Math.Max(10, _authApiOptions.HeartbeatIntervalSeconds)),
                 stoppingToken);
         }
+    }
+
+    private async Task SendHeartbeatOnceAsync(CancellationToken cancellationToken)
+    {
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<RealmDbContext>();
+
+        var nowUtc = DateTime.UtcNow;
+        var healthyCutoff = nowUtc.AddSeconds(-Math.Max(30, _authApiOptions.HeartbeatIntervalSeconds * 2));
+
+        var healthyZones = await dbContext.RealmZoneInstances
+            .AsNoTracking()
+            .Where(x =>
+                x.LastHeartbeatUtc != null &&
+                x.LastHeartbeatUtc >= healthyCutoff &&
+                x.Status == "online")
+            .ToListAsync(cancellationToken);
+
+        var currentPlayers = healthyZones.Sum(x => x.CurrentPlayers);
+        var healthyZoneCount = healthyZones.Count;
+
+        if (healthyZoneCount > 0)
+        {
+            _lastHealthyZoneSeenUtc = nowUtc;
+        }
+
+        var status = ComputeRealmStatus(nowUtc, healthyZoneCount);
+
+        var request = new RealmHeartbeatRequest
+        {
+            RealmId = _realmOptions.RealmId,
+            Status = status,
+            CurrentPlayers = currentPlayers,
+            MaxPlayers = _realmOptions.MaxPlayers,
+            HealthyZoneCount = healthyZoneCount
+        };
+
+        await _authApiClient.SendRealmHeartbeatAsync(request, cancellationToken);
+
+        _logger.LogDebug(
+            "Realm heartbeat sent. RealmId={RealmId}, Status={Status}, Players={CurrentPlayers}/{MaxPlayers}, HealthyZones={HealthyZoneCount}",
+            request.RealmId,
+            request.Status,
+            request.CurrentPlayers,
+            request.MaxPlayers,
+            request.HealthyZoneCount);
+    }
+
+    private string ComputeRealmStatus(DateTime nowUtc, int healthyZoneCount)
+    {
+        if (healthyZoneCount > 0)
+        {
+            return "online";
+        }
+
+        if (_lastHealthyZoneSeenUtc is null)
+        {
+            return "degraded";
+        }
+
+        var secondsSinceHealthy = (nowUtc - _lastHealthyZoneSeenUtc.Value).TotalSeconds;
+
+        if (secondsSinceHealthy >= Math.Max(30, _realmOptions.OfflineWhenNoHealthyZonesAfterSeconds))
+        {
+            return "offline";
+        }
+
+        return "degraded";
     }
 }

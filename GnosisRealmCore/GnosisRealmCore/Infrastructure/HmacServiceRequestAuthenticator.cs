@@ -28,7 +28,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
 
         if (!_options.Enabled)
         {
-            context = new ServiceAuthContext("disabled", Array.Empty<string>(), Array.Empty<string>());
+            context = new ServiceAuthContext("disabled", Array.Empty<string>());
             return true;
         }
 
@@ -102,7 +102,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
             return false;
         }
 
-        context = new ServiceAuthContext(client.ServiceId, client.Roles, client.AllowedRealmIds);
+        context = new ServiceAuthContext(client.ServiceId, client.AllowedRealmIds);
         return true;
     }
 }

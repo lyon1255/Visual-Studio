@@ -1,5 +1,4 @@
 namespace GnosisRealmCore.Models;
-
 public sealed class OfficialRealmHeartbeatRequest
 {
     public string RealmId { get; set; } = string.Empty;
