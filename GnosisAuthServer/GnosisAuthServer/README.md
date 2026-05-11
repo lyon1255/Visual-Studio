@@ -96,6 +96,7 @@ Az admin endpointokkal lehet:
 - realm official/community allapotot kezelni
 - realm listed/enabled allapotot kezelni
 - global GameData snapshotot cserelni
+- account tiltast es tiltast feloldani
 - kesobb command mode-hoz alapot adni
 
 ---
@@ -257,6 +258,15 @@ A jelenlegi global GameData snapshot admin lekerdezese.
 
 A global GameData teljes cserje.
 
+#### `PUT /api/admin/accounts/ban`
+
+Account tiltasi vagy tiltast-feloldo endpoint.
+
+Feladata:
+- account ban status frissitese SteamId alapjan
+- ban reason kezelese
+- account access cache invalidalasa
+
 ---
 
 ### 4.6 Health endpointok
@@ -335,6 +345,7 @@ Feladata:
 - konfiguracio betoltese
 - szolgaltatasok regisztralasa
 - adatbazis kapcsolat ellenorzese
+- Redis nonce store kapcsolat ellenorzese, ha engedelyezett
 - JWT auth pipeline felallitasa
 - rate limiting bekotese
 - CORS bekotese
@@ -372,6 +383,10 @@ A schema manifest es migration content kiszolgalasa a RealmCore fele.
 ### `Controllers/AdminRealmsController.cs`
 
 Realm admin muveletek.
+
+### `Controllers/AdminAccountsController.cs`
+
+Account ban es unban admin muveletek.
 
 ### `Controllers/HealthController.cs`
 
@@ -427,6 +442,7 @@ Peldak:
 - `RealmRegistryService`
 - `GameDataService`
 - `SchemaCatalogService`
+- `CachedAccountAccessValidator`
 
 ### `Options/`
 
@@ -604,7 +620,8 @@ Az admin secret ne maradjon a fajlban.
   "Enabled": true,
   "HeaderName": "X-Gnosis-Admin-Key",
   "ApiKey": "",
-  "AllowedIpAddresses": [ "127.0.0.1" ]
+  "AllowedIpAddresses": [ "127.0.0.1" ],
+  "AllowedIpNetworks": []
 }
 ```
 
@@ -614,6 +631,7 @@ Production pelda:
 GNOSIS_AUTH__Admin__ApiKey=your_admin_secret
 GNOSIS_AUTH__Admin__AllowedIpAddresses__0=10.0.0.10
 GNOSIS_AUTH__Admin__AllowedIpAddresses__1=10.0.0.11
+GNOSIS_AUTH__Admin__AllowedIpNetworks__0=10.0.0.0/24
 ```
 
 ### 7.9 `Security`
@@ -669,7 +687,65 @@ Pelda:
 
 ---
 
-## 8. Realm ownership es official/community modell
+## 8. Mit ellenoriz az alkalmazas indulaskor?
+
+A `GnosisAuthServer` tartalmaz startup-validaciot. Ez azt jelenti, hogy bizonyos hibas vagy veszelyes konfiguracioval az Auth API nem indul el.
+
+Az alkalmazas indulaskor a kovetkezoket ellenorzi:
+
+### 8.1 Alap konfiguracios ellenorzesek
+
+- a `Database:ConnectionString` jelen van-e
+- a `Jwt:PrivateKeyPemPath` jelen van-e
+- a `Jwt:PublicKeyPemPath` jelen van-e
+- a `NonceStore:RedisConnectionString` jelen van-e, ha a distributed nonce store engedelyezve van
+
+### 8.2 Infrastrukturális kapcsolatok
+
+- a MySQL adatbazis tenylegesen elerheto-e
+- ha a Redis-backed nonce store be van kapcsolva, a Redis kapcsolat tenylegesen elerheto-e
+
+### 8.3 Production startup guardok
+
+Production kornyezetben az Auth API tovabbi fail-fast ellenorzeseket vegez:
+
+- `Security:RequireHttps` kotelezoen `true`
+- `NonceStore:UseDistributedCache` kotelezoen `true`
+- `Steam:AllowMockTicketsInDevelopment` kotelezoen `false`
+- ha az admin API engedelyezett, akkor az admin allowlist nem lehet ures
+- a placeholder vagy ures secret ertekek tiltottak productionben
+
+Productionben a kovetkezo ertekek nem lehetnek ures vagy placeholder allapotuak:
+
+- `Database:ConnectionString`
+- `Steam:PublisherKey`
+- `Admin:ApiKey`
+- `NonceStore:RedisConnectionString`
+- `Jwt:PrivateKeyPemPath`
+- `Jwt:PublicKeyPemPath`
+- `ServiceAuth:Clients[*]:Secret`
+
+### 8.4 Modul regisztracios ellenorzes
+
+Az alkalmazas indulaskor ellenorzi, hogy a kotelezo command modulok mind regisztralva vannak-e.
+
+Ez csokkenti annak az eselyet, hogy a build vagy refaktor kozben valami kritikus komponens kimaradjon az inditasbol.
+
+### 8.5 Mit nem ellenoriz az alkalmazas indulaskor?
+
+Ezeket nem maga az alkalmazas ellenorzi, hanem deployment vagy uzemeltetesi checklistben kell kulon vizsgalni:
+
+- az Nginx reverse proxy tenylegesen jol van-e bekotve
+- a TLS certificate tenylegesen ervenyes-e es a megfelelo hostnevre van-e kiadva
+- a firewall vagy cloud security group tenylegesen korlatozza-e a forgalmat
+- az admin endpointok tenylegesen csak belso halo/VPN felol erhetoek-e el
+- a systemd service tenylegesen a helyes environment valtozokkal fut-e
+- a CI build es teszt workflow tenylegesen zold-e
+- a publish output fajljogosultsagai megfeleloek-e
+
+---
+
+## 9. Realm ownership es official/community modell
 
 Ez a projekt az official/community kulonbseget a DB-ben tarolja.
 
@@ -689,7 +765,7 @@ Ezert:
 
 ---
 
-## 9. JWT RSA kulcsok
+## 10. JWT RSA kulcsok
 
 Ez a projekt RSA kulcspaar alapjan ir ala JWT tokeneket.
 
@@ -714,14 +790,14 @@ chmod 644 /opt/gnosis/authapi/app/keys/auth_public.pem
 
 ---
 
-## 10. Elso telepites Ubuntu VPS-en
+## 11. Elso telepites Ubuntu VPS-en
 
 Ez a README abbol indul ki, hogy:
 - a publish outputot a sajat gepedrol toltesz fel
 - a source kodot nem telepited a szerverre
 - az AuthApi `app` mappaba kerul
 
-### 10.1 Mappak letrehozasa
+### 11.1 Mappak letrehozasa
 
 ```bash
 sudo mkdir -p /opt/gnosis/authapi/app
@@ -730,7 +806,7 @@ sudo mkdir -p /opt/gnosis/authapi/app/logs
 sudo mkdir -p /opt/gnosis/authapi/app/SchemaMigrations/realmcore
 ```
 
-### 10.2 Publish output feltoltese
+### 11.2 Publish output feltoltese
 
 A Visual Studio publish output tartalmat toltsd fel ide:
 
@@ -738,13 +814,13 @@ A Visual Studio publish output tartalmat toltsd fel ide:
 /opt/gnosis/authapi/app
 ```
 
-### 10.3 Futtathato jog
+### 11.3 Futtathato jog
 
 ```bash
 chmod +x /opt/gnosis/authapi/app/GnosisAuthServer
 ```
 
-### 10.4 Environment valtozok beallitasa
+### 11.4 Environment valtozok beallitasa
 
 Productionben a secretekhez env valtozokat hasznalj. Minimalis pelda:
 
@@ -760,7 +836,7 @@ export GNOSIS_AUTH__NonceStore__UseDistributedCache=true
 export GNOSIS_AUTH__NonceStore__RedisConnectionString="127.0.0.1:6379,abortConnect=false"
 ```
 
-### 10.5 Kezi inditas
+### 11.5 Kezi inditas
 
 ```bash
 cd /opt/gnosis/authapi/app
@@ -769,7 +845,7 @@ cd /opt/gnosis/authapi/app
 
 ---
 
-## 11. systemd service
+## 12. systemd service
 
 Javasolt `systemd` service.
 
@@ -798,7 +874,7 @@ A tobbi secretet erdemes `EnvironmentFile=` vagy systemd credential file segitse
 
 ---
 
-## 12. Nginx reverse proxy
+## 13. Nginx reverse proxy
 
 Javasolt topologia:
 - Auth API csak `127.0.0.1:5158`
@@ -828,7 +904,7 @@ server {
 
 ---
 
-## 13. Rate limiting
+## 14. Rate limiting
 
 A projekt rate limitinget hasznal.
 
@@ -844,15 +920,17 @@ Ez fontos vedelmi reteg brute-force, flood vagy hibas belso integracio ellen.
 
 ---
 
-## 14. Security modell roviden
+## 15. Security modell roviden
 
 A jelenlegi Auth API security modellje:
 - Steam ticket validacio public login endpointnal
 - RSA alapu JWT token kiadas
+- public bearer endpointoknal account access ellenorzes
 - internal HMAC service auth
 - nonce alapu replay vedelem
 - Redis-backed replay protection productionben
-- admin header + IP whitelist
+- admin HMAC auth + IP/IP network whitelist
+- admin account ban/unban cache invalidalassal
 - rate limiting
 - loopback bind javasolt
 - reverse proxy mogotti uzem
@@ -863,7 +941,7 @@ A jelenlegi Auth API security modellje:
 
 ---
 
-## 15. Kesesobbi admin command mode
+## 16. Kesesobbi admin command mode
 
 A projekt tervezett kovetkezo kenyelmi lepese egy `gnosis-auth` command mode vagy CLI admin layer lehet.
 
@@ -879,7 +957,7 @@ Ez jobb irany, mint a nyers MySQL vagy phpMyAdmin.
 
 ---
 
-## 16. Leggyakoribb hibak
+## 17. Leggyakoribb hibak
 
 ### `JWT private key file was not found`
 
@@ -910,6 +988,7 @@ Oka:
 
 Oka:
 - a hivo nincs benne az `AllowedRealmIds` listaban az adott realmre
+- az admin kerest tiltott halozatrol probaljak elerni
 
 ### `ready` health check nem jo
 
@@ -923,12 +1002,13 @@ Oka:
 Oka:
 - ures vagy placeholder secret maradt a configban
 - a Redis nonce store nincs bekapcsolva productionben
-- az admin IP allowlist ures
+- az admin IP vagy halozati allowlist ures
 - a HTTPS policy hibas
+- a Redis kapcsolat nem elerheto
 
 ---
 
-## 17. Production checklist
+## 18. Production checklist
 
 Telepites elott:
 - allitsd be env valtozobol a DB connection stringet
@@ -940,15 +1020,17 @@ Telepites elott:
 - generalj RSA kulcspart
 - allitsd be a valos Steam AppId erteket
 - allitsd be a helyes `AllowedRealmIds` ertekeket
+- allitsd be az admin `AllowedIpAddresses` vagy `AllowedIpNetworks` ertekeket
 - ellenorizd a `SchemaDelivery` mappat es fajlneveket
 - tedd az Auth API-t Nginx moge
 - korlatozd az admin endpointot halozati szinten is
 - engedelyezd a systemd service-t
 - teszteld a `live` es `ready` endpointot
+- ellenorizd, hogy a CI build es teszt workflow zold
 
 ---
 
-## 18. Gyors osszefoglalo
+## 19. Gyors osszefoglalo
 
 A `GnosisAuthServer` jelenlegi leegyszerusitett modellje:
 - kezeli a public Steam login flow-t
@@ -958,6 +1040,7 @@ A `GnosisAuthServer` jelenlegi leegyszerusitett modellje:
 - a canonical GameData forrasa
 - internal schema manifestet es migration tartalmat ad a RealmCore-nak
 - admin oldalon kezeli a realm metadata-t, koztuk az `is_official` allapotot
+- admin oldalon account tiltast es feloldast is tud kezelni
 - systemd + Nginx mogotti Linuxos uzemre van tervezve
 - productionben env-var alapu secret kezelesre es Redis-backed replay vedelemre van felkeszitve
 
