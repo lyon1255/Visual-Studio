@@ -9,6 +9,9 @@ public abstract class GameDataBaseEntity
     [Column("id")]
     public int Id { get; set; }
 
+    [Column("version_number")]
+    public int VersionNumber { get; set; }
+
     [Required]
     [MaxLength(100)]
     [Column("asset_id")]
@@ -63,6 +66,9 @@ public sealed class GameDataVersion
     [MaxLength(128)]
     [Column("content_hash")]
     public string ContentHash { get; set; } = string.Empty;
+
+    [Column("is_active")]
+    public bool IsActive { get; set; }
 
     [MaxLength(512)]
     [Column("notes")]
