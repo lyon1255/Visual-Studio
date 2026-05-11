@@ -57,6 +57,18 @@ if (string.IsNullOrWhiteSpace(jwtOptions.PublicKeyPemPath))
     throw new InvalidOperationException("Jwt:PublicKeyPemPath is missing.");
 }
 
+var steamOptions = builder.Configuration.GetSection(SteamOptions.SectionName).Get<SteamOptions>()
+    ?? throw new InvalidOperationException("Steam configuration is missing.");
+
+var adminOptions = builder.Configuration.GetSection(AdminOptions.SectionName).Get<AdminOptions>()
+    ?? throw new InvalidOperationException("Admin configuration is missing.");
+
+var serviceAuthOptions = builder.Configuration.GetSection(ServiceAuthOptions.SectionName).Get<ServiceAuthOptions>()
+    ?? throw new InvalidOperationException("ServiceAuth configuration is missing.");
+
+var securityOptions = builder.Configuration.GetSection(SecurityOptions.SectionName).Get<SecurityOptions>()
+    ?? throw new InvalidOperationException("Security configuration is missing.");
+
 var nonceStoreOptions = builder.Configuration.GetSection(NonceStoreOptions.SectionName).Get<NonceStoreOptions>()
     ?? new NonceStoreOptions();
 
@@ -286,7 +298,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
-await ValidateStartupAsync(app, nonceStoreOptions);
+await ValidateStartupAsync(app, nonceStoreOptions, securityOptions, adminOptions, steamOptions, serviceAuthOptions, databaseOptions, jwtOptions);
 
 var commandExitCode = await AuthCommandModeRunner.TryRunAsync(app, args);
 if (commandExitCode.HasValue)
@@ -305,9 +317,9 @@ if (!app.Environment.IsDevelopment())
 
 app.Use(async (context, next) =>
 {
-    var securityOptions = context.RequestServices.GetRequiredService<IOptions<SecurityOptions>>().Value;
+    var requestSecurityOptions = context.RequestServices.GetRequiredService<IOptions<SecurityOptions>>().Value;
 
-    if (securityOptions.RequireHttps && !context.Request.IsHttps)
+    if (requestSecurityOptions.RequireHttps && !context.Request.IsHttps)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
         await context.Response.WriteAsJsonAsync(new { error = "HTTPS is required." });
@@ -352,7 +364,15 @@ static string GetPreAuthPartitionKey(HttpContext context)
     return $"{remoteIp}:{path}";
 }
 
-static async Task ValidateStartupAsync(WebApplication app, NonceStoreOptions nonceStoreOptions)
+static async Task ValidateStartupAsync(
+    WebApplication app,
+    NonceStoreOptions nonceStoreOptions,
+    SecurityOptions securityOptions,
+    AdminOptions adminOptions,
+    SteamOptions steamOptions,
+    ServiceAuthOptions serviceAuthOptions,
+    DatabaseOptions databaseOptions,
+    JwtOptions jwtOptions)
 {
     using var scope = app.Services.CreateScope();
 
@@ -369,6 +389,49 @@ static async Task ValidateStartupAsync(WebApplication app, NonceStoreOptions non
         if (!redis.IsConnected)
         {
             throw new InvalidOperationException("Redis nonce store is enabled, but the Redis connection is not available during startup.");
+        }
+    }
+
+    if (app.Environment.IsProduction())
+    {
+        if (!securityOptions.RequireHttps)
+        {
+            throw new InvalidOperationException("Security:RequireHttps must be true in production.");
+        }
+
+        if (!nonceStoreOptions.UseDistributedCache)
+        {
+            throw new InvalidOperationException("NonceStore:UseDistributedCache must be true in production.");
+        }
+
+        if (steamOptions.AllowMockTicketsInDevelopment)
+        {
+            throw new InvalidOperationException("Steam:AllowMockTicketsInDevelopment must be false in production.");
+        }
+
+        if (adminOptions.Enabled && adminOptions.RequireExplicitIpAllowlistInProduction && adminOptions.AllowedIpAddresses.Length == 0)
+        {
+            throw new InvalidOperationException("Admin:AllowedIpAddresses must contain at least one entry in production when admin access is enabled.");
+        }
+
+        var placeholderErrors = new List<string>();
+
+        ValidateSecret(databaseOptions.ConnectionString, "Database:ConnectionString", placeholderErrors);
+        ValidateSecret(steamOptions.PublisherKey, "Steam:PublisherKey", placeholderErrors);
+        ValidateSecret(adminOptions.ApiKey, "Admin:ApiKey", placeholderErrors);
+        ValidateSecret(nonceStoreOptions.RedisConnectionString, "NonceStore:RedisConnectionString", placeholderErrors);
+        ValidateSecret(jwtOptions.PrivateKeyPemPath, "Jwt:PrivateKeyPemPath", placeholderErrors);
+        ValidateSecret(jwtOptions.PublicKeyPemPath, "Jwt:PublicKeyPemPath", placeholderErrors);
+
+        foreach (var client in serviceAuthOptions.Clients)
+        {
+            ValidateSecret(client.Secret, $"ServiceAuth:Clients[{client.ServiceId}]:Secret", placeholderErrors);
+        }
+
+        if (placeholderErrors.Count > 0)
+        {
+            throw new InvalidOperationException(
+                $"Production configuration contains missing or placeholder secrets: {string.Join(", ", placeholderErrors)}");
         }
     }
 
@@ -404,5 +467,19 @@ static async Task ValidateStartupAsync(WebApplication app, NonceStoreOptions non
     {
         throw new InvalidOperationException(
             $"Missing command module registrations: {string.Join(", ", missingModules)}");
+    }
+}
+
+static void ValidateSecret(string value, string name, List<string> errors)
+{
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        errors.Add(name);
+        return;
+    }
+
+    if (value.Contains("CHANGE_ME", StringComparison.OrdinalIgnoreCase))
+    {
+        errors.Add(name);
     }
 }
