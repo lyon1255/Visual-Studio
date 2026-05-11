@@ -1,6 +1,5 @@
 ﻿using GnosisAuthServer.Data;
 using GnosisAuthServer.Options;
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace GnosisAuthServer.CommandMode.Modules;

@@ -1,5 +1,4 @@
 using GnosisAuthServer.Options;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using System.Net;
 using System.Security.Cryptography;
