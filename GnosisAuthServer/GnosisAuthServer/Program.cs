@@ -92,6 +92,7 @@ builder.Services.AddSingleton<IAuthCommandModule, ServicesCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, GameDataCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, SecurityCommandModule>();
 
+builder.Services.AddProblemDetails();
 builder.Services.AddControllers();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -249,6 +250,7 @@ if (commandExitCode.HasValue)
 }
 
 app.UseForwardedHeaders();
+app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 
 if (!app.Environment.IsDevelopment())
 {
