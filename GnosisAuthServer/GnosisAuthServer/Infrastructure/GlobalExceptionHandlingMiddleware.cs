@@ -40,13 +40,33 @@ public sealed class GlobalExceptionHandlingMiddleware
 
     private async Task HandleExceptionAsync(HttpContext context, Exception exception)
     {
-        var (statusCode, title) = exception switch
+        var (statusCode, title, type, safeDetail) = exception switch
         {
-            UnauthorizedAccessException => (StatusCodes.Status403Forbidden, "Forbidden"),
-            InvalidOperationException => (StatusCodes.Status400BadRequest, "Invalid request"),
-            JsonException => (StatusCodes.Status400BadRequest, "Malformed JSON"),
-            DbUpdateException => (StatusCodes.Status500InternalServerError, "Database error"),
-            _ => (StatusCodes.Status500InternalServerError, "Internal server error")
+            UnauthorizedAccessException => (
+                StatusCodes.Status403Forbidden,
+                "Forbidden",
+                "https://httpstatuses.com/403",
+                "You do not have permission to perform this action."),
+            InvalidOperationException => (
+                StatusCodes.Status400BadRequest,
+                "Invalid request",
+                "https://httpstatuses.com/400",
+                "The request could not be processed."),
+            JsonException => (
+                StatusCodes.Status400BadRequest,
+                "Malformed JSON",
+                "https://httpstatuses.com/400",
+                "The request body contains malformed JSON."),
+            DbUpdateException => (
+                StatusCodes.Status500InternalServerError,
+                "Database error",
+                "https://httpstatuses.com/500",
+                "An unexpected error occurred."),
+            _ => (
+                StatusCodes.Status500InternalServerError,
+                "Internal server error",
+                "https://httpstatuses.com/500",
+                "An unexpected error occurred.")
         };
 
         using (_logger.BeginScope(new Dictionary<string, object?>
@@ -75,9 +95,10 @@ public sealed class GlobalExceptionHandlingMiddleware
 
         var problem = new ProblemDetails
         {
+            Type = type,
             Status = statusCode,
             Title = title,
-            Detail = statusCode >= 500 ? "An unexpected error occurred." : exception.Message,
+            Detail = safeDetail,
             Instance = context.Request.Path
         };
 
