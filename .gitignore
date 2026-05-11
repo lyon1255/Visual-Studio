@@ -1,18 +1,28 @@
-/MmorpgAuthServer
-/GnosisRealmServer/GnosisRealmServer/obj
-/Gnosis Master Hub
-/Gnosis Node Agent/.vs
-/Gnosis Node Agent/GnosisNodeAgent/bin
-/Gnosis Node Agent/GnosisNodeAgent/obj
-/Gnosis Node Agent/GnosisNodeAgent/Properties
-/GnosisAuthServer/.vs
-/GnosisAuthServer/GnosisAuthServer/bin
-/GnosisAuthServer/GnosisAuthServer/obj
-/GnosisRealmServer/.vs
-/GnosisRealmServer/GnosisRealmServer/.vs
-/GnosisRealmServer/GnosisRealmServer/bin
-/GnosisAuthServer/GnosisAuthServer/Properties
-/GnosisRealmServer
-/GnosisRealmCore/.vs
-/GnosisRealmCore/GnosisRealmCore/bin
-/GnosisRealmCore/GnosisRealmCore/obj
+# Build outputs
+**/bin/
+**/obj/
+
+# IDE and user-specific files
+**/.vs/
+**/*.user
+**/*.suo
+**/*.userosscache
+**/*.sln.docstates
+
+# Rider / VS Code
+**/.idea/
+**/.vscode/
+
+# Test and coverage artifacts
+**/TestResults/
+**/coverage/
+**/*.coverage
+**/*.coveragexml
+
+# Publish and local environment artifacts
+**/Properties/PublishProfiles/*.pubxml.user
+**/appsettings.*.local.json
+
+# OS files
+**/.DS_Store
+**/Thumbs.db

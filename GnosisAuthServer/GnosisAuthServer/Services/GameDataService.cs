@@ -1,20 +1,29 @@
 using GnosisAuthServer.Data;
 using GnosisAuthServer.Models;
+using GnosisAuthServer.Options;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
 namespace GnosisAuthServer.Services;
 
-public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
+public sealed class GameDataService : IGameDataService
 {
     private static readonly JsonSerializerOptions CanonicalJsonOptions = new()
     {
         WriteIndented = false
     };
 
-    private readonly AuthDbContext _dbContext = dbContext;
+    private readonly AuthDbContext _dbContext;
+    private readonly GameDataOptions _options;
+
+    public GameDataService(AuthDbContext dbContext, IOptions<GameDataOptions> options)
+    {
+        _dbContext = dbContext;
+        _options = options.Value;
+    }
 
     public async Task<GlobalGameDataVersionResponse> GetCurrentVersionAsync(CancellationToken cancellationToken)
     {
@@ -42,7 +51,6 @@ public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
         };
     }
 
-
     public async Task<GlobalGameDataSnapshotResponse> GetCurrentSnapshotAsync(CancellationToken cancellationToken)
     {
         var latest = await GetCurrentVersionAsync(cancellationToken);
@@ -63,11 +71,11 @@ public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
 
     public async Task<GlobalGameDataSnapshotResponse> ReplaceSnapshotAsync(ReplaceGlobalGameDataRequest request, CancellationToken cancellationToken)
     {
-        ValidateEntries(request.Items, nameof(request.Items));
-        ValidateEntries(request.Entities, nameof(request.Entities));
-        ValidateEntries(request.Quests, nameof(request.Quests));
-        ValidateEntries(request.Spells, nameof(request.Spells));
-        ValidateEntries(request.Auras, nameof(request.Auras));
+        ValidateEntries(request.Items, nameof(request.Items), _options);
+        ValidateEntries(request.Entities, nameof(request.Entities), _options);
+        ValidateEntries(request.Quests, nameof(request.Quests), _options);
+        ValidateEntries(request.Spells, nameof(request.Spells), _options);
+        ValidateEntries(request.Auras, nameof(request.Auras), _options);
 
         var publishedAt = DateTime.UtcNow;
         var nextVersion = (await _dbContext.GameDataVersions.MaxAsync(x => (int?)x.VersionNumber, cancellationToken) ?? 0) + 1;
@@ -115,8 +123,13 @@ public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
         return await GetCurrentSnapshotAsync(cancellationToken);
     }
 
-    private static void ValidateEntries(List<GameDataEntryDto> entries, string collectionName)
+    private static void ValidateEntries(List<GameDataEntryDto> entries, string collectionName, GameDataOptions options)
     {
+        if (entries.Count > options.MaxEntriesPerCollection)
+        {
+            throw new InvalidOperationException($"{collectionName} exceeds the maximum allowed entries ({options.MaxEntriesPerCollection}).");
+        }
+
         foreach (var entry in entries)
         {
             if (string.IsNullOrWhiteSpace(entry.AssetId))
@@ -132,6 +145,11 @@ public sealed class GameDataService(AuthDbContext dbContext) : IGameDataService
             if (string.IsNullOrWhiteSpace(entry.JsonData))
             {
                 throw new InvalidOperationException($"{collectionName} contains empty JsonData for AssetId '{entry.AssetId}'.");
+            }
+
+            if (entry.JsonData.Length > options.MaxJsonDataLength)
+            {
+                throw new InvalidOperationException($"{collectionName} contains oversized JsonData for AssetId '{entry.AssetId}'.");
             }
 
             try

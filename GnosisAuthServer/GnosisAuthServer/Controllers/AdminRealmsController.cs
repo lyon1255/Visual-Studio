@@ -22,9 +22,10 @@ public sealed class AdminRealmsController : ControllerBase
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken cancellationToken)
     {
-        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        var authResult = await _adminRequestValidator.AuthorizeAsync(Request, cancellationToken);
+        if (!authResult.IsAuthorized)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         var realms = await _realmRegistryService.GetAllRealmsAsync(cancellationToken);
@@ -35,9 +36,10 @@ public sealed class AdminRealmsController : ControllerBase
     [EnableRateLimiting("admin-write")]
     public async Task<IActionResult> Create([FromBody] AdminRealmUpsertRequest request, CancellationToken cancellationToken)
     {
-        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        var authResult = await _adminRequestValidator.AuthorizeAsync(Request, cancellationToken);
+        if (!authResult.IsAuthorized)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         if (!ModelState.IsValid)
@@ -60,9 +62,10 @@ public sealed class AdminRealmsController : ControllerBase
     [EnableRateLimiting("admin-write")]
     public async Task<IActionResult> Update(string realmId, [FromBody] AdminRealmUpsertRequest request, CancellationToken cancellationToken)
     {
-        if (!_adminRequestValidator.TryAuthorize(Request, out var error))
+        var authResult = await _adminRequestValidator.AuthorizeAsync(Request, cancellationToken);
+        if (!authResult.IsAuthorized)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         if (!ModelState.IsValid)

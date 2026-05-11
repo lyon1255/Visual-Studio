@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Net;
@@ -29,6 +30,8 @@ builder.Services.Configure<ServiceAuthOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection(AdminOptions.SectionName));
+builder.Services.Configure<SchemaDeliveryOptions>(builder.Configuration.GetSection(SchemaDeliveryOptions.SectionName));
+builder.Services.Configure<GameDataOptions>(builder.Configuration.GetSection(GameDataOptions.SectionName));
 
 var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
     ?? throw new InvalidOperationException("Database configuration is missing.");
@@ -61,16 +64,21 @@ builder.Services.AddDbContext<AuthDbContext>(options =>
 var rsaKeyProvider = new FileRsaKeyProvider(Options.Create(jwtOptions));
 builder.Services.AddSingleton<IRsaKeyProvider>(rsaKeyProvider);
 
-builder.Services.AddMemoryCache(options =>
-{
-    options.SizeLimit = 10_000;
-});
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<MemoryCache>(_ =>
+    new MemoryCache(new MemoryCacheOptions
+    {
+        SizeLimit = 10_000
+    }));
 
 builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
 builder.Services.AddScoped<IGameDataService, GameDataService>();
-builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
+builder.Services.AddScoped<IAccountAccessValidator, CachedAccountAccessValidator>();
+builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
+builder.Services.AddSingleton<INonceStore>(sp =>
+    new MemoryNonceStore(sp.GetRequiredService<MemoryCache>()));
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<IIpBanCacheService, IpBanCacheService>();
@@ -85,6 +93,7 @@ builder.Services.AddSingleton<IAuthCommandModule, ServicesCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, GameDataCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, SecurityCommandModule>();
 
+builder.Services.AddProblemDetails();
 builder.Services.AddControllers();
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
@@ -101,6 +110,23 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = rsaKeyProvider.GetValidationKey(),
             ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var steamId = context.Principal?.FindFirst("sub")?.Value
+                    ?? context.Principal?.Identity?.Name;
+
+                var accountAccessValidator = context.HttpContext.RequestServices.GetRequiredService<IAccountAccessValidator>();
+                var result = await accountAccessValidator.ValidateAsync(steamId ?? string.Empty, context.HttpContext.RequestAborted);
+
+                if (!result.IsAllowed)
+                {
+                    context.Fail(result.DenialReason ?? "Account access denied.");
+                }
+            }
         };
     });
 
@@ -150,6 +176,17 @@ builder.Services.AddRateLimiter(options =>
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("realm-schema-read", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetServicePartitionKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true
@@ -231,6 +268,7 @@ if (commandExitCode.HasValue)
 }
 
 app.UseForwardedHeaders();
+app.UseMiddleware<GlobalExceptionHandlingMiddleware>();
 
 if (!app.Environment.IsDevelopment())
 {

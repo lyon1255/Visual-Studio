@@ -1,4 +1,4 @@
-﻿using GnosisAuthServer.Models;
+using GnosisAuthServer.Models;
 using GnosisAuthServer.Options;
 using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
@@ -26,29 +26,14 @@ public sealed class SchemaCatalogService : ISchemaCatalogService
     {
         if (!_options.Enabled)
         {
-            return new SchemaManifestResponse
-            {
-                Channel = _options.Channel,
-                LatestMigrationId = string.Empty,
-                MigrationCount = 0,
-                PublishedAtUtc = DateTime.UtcNow,
-                Migrations = new List<SchemaMigrationDescriptorResponse>()
-            };
+            return CreateEmptyManifest();
         }
 
         var directory = ResolveDirectoryPath();
         if (!Directory.Exists(directory))
         {
             _logger.LogWarning("Schema directory does not exist: {Directory}", directory);
-
-            return new SchemaManifestResponse
-            {
-                Channel = _options.Channel,
-                LatestMigrationId = string.Empty,
-                MigrationCount = 0,
-                PublishedAtUtc = DateTime.UtcNow,
-                Migrations = new List<SchemaMigrationDescriptorResponse>()
-            };
+            return CreateEmptyManifest();
         }
 
         var files = Directory
@@ -59,15 +44,7 @@ public sealed class SchemaCatalogService : ISchemaCatalogService
         if (files.Count == 0)
         {
             _logger.LogWarning("Schema directory contains no .mysql files: {Directory}", directory);
-
-            return new SchemaManifestResponse
-            {
-                Channel = _options.Channel,
-                LatestMigrationId = string.Empty,
-                MigrationCount = 0,
-                PublishedAtUtc = DateTime.UtcNow,
-                Migrations = new List<SchemaMigrationDescriptorResponse>()
-            };
+            return CreateEmptyManifest();
         }
 
         var migrations = new List<SchemaMigrationDescriptorResponse>(files.Count);
@@ -97,9 +74,7 @@ public sealed class SchemaCatalogService : ISchemaCatalogService
         };
     }
 
-    public async Task<SchemaMigrationContentResponse?> GetMigrationAsync(
-        string migrationId,
-        CancellationToken cancellationToken = default)
+    public async Task<SchemaMigrationContentResponse?> GetMigrationAsync(string migrationId, CancellationToken cancellationToken = default)
     {
         if (!_options.Enabled || string.IsNullOrWhiteSpace(migrationId))
         {
@@ -120,11 +95,7 @@ public sealed class SchemaCatalogService : ISchemaCatalogService
 
         var file = Directory
             .GetFiles(directory, "*.mysql", SearchOption.TopDirectoryOnly)
-            .FirstOrDefault(path =>
-                string.Equals(
-                    Path.GetFileNameWithoutExtension(path),
-                    migrationId,
-                    StringComparison.Ordinal));
+            .FirstOrDefault(path => string.Equals(Path.GetFileNameWithoutExtension(path), migrationId, StringComparison.Ordinal));
 
         if (file is null)
         {
@@ -140,6 +111,18 @@ public sealed class SchemaCatalogService : ISchemaCatalogService
             ChecksumSha256 = ComputeChecksumSha256(sql),
             IsDestructive = IsDestructiveMigrationName(migrationId),
             Sql = sql
+        };
+    }
+
+    private SchemaManifestResponse CreateEmptyManifest()
+    {
+        return new SchemaManifestResponse
+        {
+            Channel = _options.Channel,
+            LatestMigrationId = string.Empty,
+            MigrationCount = 0,
+            PublishedAtUtc = DateTime.UtcNow,
+            Migrations = new List<SchemaMigrationDescriptorResponse>()
         };
     }
 

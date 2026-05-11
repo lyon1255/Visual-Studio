@@ -19,7 +19,11 @@ public sealed class MemoryNonceStore : INonceStore
             return false;
         }
 
-        _cache.Set(cacheKey, true, ttl);
+        using var entry = _cache.CreateEntry(cacheKey);
+        entry.Value = true;
+        entry.AbsoluteExpirationRelativeToNow = ttl;
+        entry.Size = 1;
+
         return true;
     }
 }
