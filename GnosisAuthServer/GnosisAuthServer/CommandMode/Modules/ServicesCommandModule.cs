@@ -1,5 +1,6 @@
 ﻿using GnosisAuthServer.Options;
 using Microsoft.Extensions.Options;
+using System.Text;
 using System.Text.Json;
 
 namespace GnosisAuthServer.CommandMode.Modules;
@@ -40,9 +41,11 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                 {
                     if (args.Length < 2)
                     {
-                        Console.Error.WriteLine("Usage: command services show <serviceId>");
+                        Console.Error.WriteLine("Usage: command services show <serviceId> [--include-secret]");
                         return 1;
                     }
+
+                    var includeSecret = CommandModeHelpers.HasFlag(args, "--include-secret");
 
                     var client = options.Clients.FirstOrDefault(x =>
                         string.Equals(x.ServiceId, args[1], StringComparison.Ordinal));
@@ -56,7 +59,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                     var output = new
                     {
                         client.ServiceId,
-                        Secret = CommandModeHelpers.MaskSecret(client.Secret),
+                        Secret = includeSecret ? client.Secret : CommandModeHelpers.MaskSecret(client.Secret),
                         client.AllowedRealmIds
                     };
 
@@ -91,6 +94,15 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                         if (string.IsNullOrWhiteSpace(client.Secret))
                         {
                             errors.Add($"Service '{client.ServiceId}' has an empty secret.");
+                        }
+                        else if (LooksMasked(client.Secret))
+                        {
+                            errors.Add($"Service '{client.ServiceId}' appears to contain a masked secret instead of a real secret.");
+                        }
+
+                        if (client.Secret?.Length < 24)
+                        {
+                            warnings.Add($"Service '{client.ServiceId}' has a short secret. Consider rotating it to a stronger value.");
                         }
 
                         if (client.AllowedRealmIds.Length == 0)
@@ -141,7 +153,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                     var serviceId = CommandModeHelpers.GetOption(args, "--service-id");
                     if (string.IsNullOrWhiteSpace(serviceId))
                     {
-                        Console.Error.WriteLine("Usage: command services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>]");
+                        Console.Error.WriteLine("Usage: command services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>] [--show-secret] [--secret-out <file>]");
                         return 1;
                     }
 
@@ -150,6 +162,11 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                     {
                         var byteCount = CommandModeHelpers.ParseIntOption(CommandModeHelpers.GetOption(args, "--bytes"), 48, 16);
                         secret = CommandModeHelpers.GenerateSecret(byteCount);
+                    }
+
+                    if (LooksMasked(secret))
+                    {
+                        throw new InvalidOperationException("Refusing to create service with a masked-looking secret.");
                     }
 
                     var firstRealm = CommandModeHelpers.GetOption(args, "--realm");
@@ -162,6 +179,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                     editor.Save(root, path);
 
                     Console.WriteLine($"Created service '{serviceId}' in '{path}'.");
+                    PrintSecretOutput(secret, args);
                     Console.WriteLine("Restart the Auth service to apply config changes.");
                     return 0;
                 }
@@ -236,12 +254,18 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                 {
                     if (args.Length < 3)
                     {
-                        Console.Error.WriteLine("Usage: command services set-secret <serviceId> <secret>");
+                        Console.Error.WriteLine("Usage: command services set-secret <serviceId> <secret> [--show-secret] [--secret-out <file>]");
                         return 1;
                     }
 
+                    var newSecret = args[2];
+                    if (LooksMasked(newSecret))
+                    {
+                        throw new InvalidOperationException("Refusing to store a masked-looking secret.");
+                    }
+
                     var (root, path) = editor.Load();
-                    var ok = editor.SetSecret(root, args[1], args[2]);
+                    var ok = editor.SetSecret(root, args[1], newSecret);
                     if (!ok)
                     {
                         Console.Error.WriteLine($"Service '{args[1]}' was not found.");
@@ -250,6 +274,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
 
                     editor.Save(root, path);
                     Console.WriteLine($"Updated secret for service '{args[1]}' in '{path}'.");
+                    PrintSecretOutput(newSecret, args);
                     Console.WriteLine("Restart the Auth service to apply config changes.");
                     return 0;
                 }
@@ -258,7 +283,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                 {
                     if (args.Length < 2)
                     {
-                        Console.Error.WriteLine("Usage: command services rotate-secret <serviceId> [--bytes <n>]");
+                        Console.Error.WriteLine("Usage: command services rotate-secret <serviceId> [--bytes <n>] [--show-secret] [--secret-out <file>]");
                         return 1;
                     }
 
@@ -275,7 +300,7 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
 
                     editor.Save(root, path);
                     Console.WriteLine($"Rotated secret for service '{args[1]}' in '{path}'.");
-                    Console.WriteLine($"New secret: {newSecret}");
+                    PrintSecretOutput(newSecret, args);
                     Console.WriteLine("Restart the Auth service to apply config changes.");
                     return 0;
                 }
@@ -284,9 +309,11 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                 {
                     if (args.Length < 2)
                     {
-                        Console.Error.WriteLine("Usage: command services export <file>");
+                        Console.Error.WriteLine("Usage: command services export <file> [--include-secrets]");
                         return 1;
                     }
+
+                    var includeSecrets = CommandModeHelpers.HasFlag(args, "--include-secrets");
 
                     var export = new ServiceImportDocument
                     {
@@ -295,7 +322,9 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                             .Select(x => new ServiceImportClient
                             {
                                 ServiceId = x.ServiceId,
-                                Secret = x.Secret,
+                                Secret = includeSecrets
+                                    ? x.Secret
+                                    : CommandModeHelpers.MaskSecret(x.Secret),
                                 AllowedRealmIds = x.AllowedRealmIds
                                     .Where(y => !string.IsNullOrWhiteSpace(y))
                                     .Distinct(StringComparer.Ordinal)
@@ -305,8 +334,12 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                             .ToList()
                     };
 
-                    await File.WriteAllTextAsync(args[1], JsonSerializer.Serialize(export, CommandExecutionContext.JsonOptions));
-                    Console.WriteLine($"Exported {export.Clients.Count} service client(s) to '{args[1]}'.");
+                    await WriteSecureTextFileAsync(args[1], JsonSerializer.Serialize(export, CommandExecutionContext.JsonOptions));
+
+                    Console.WriteLine(includeSecrets
+                        ? $"Exported {export.Clients.Count} service client(s) with raw secrets to '{args[1]}'. Handle this file as sensitive."
+                        : $"Exported {export.Clients.Count} service client(s) with masked secrets to '{args[1]}'.");
+
                     return 0;
                 }
 
@@ -339,6 +372,12 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
                         if (string.IsNullOrWhiteSpace(client.Secret))
                         {
                             throw new InvalidOperationException($"Imported service '{client.ServiceId}' has empty secret.");
+                        }
+
+                        if (LooksMasked(client.Secret))
+                        {
+                            throw new InvalidOperationException(
+                                $"Imported service '{client.ServiceId}' contains a masked secret. Use an export created with --include-secrets.");
                         }
 
                         editor.DeleteClient(root, client.ServiceId);
@@ -386,18 +425,72 @@ internal sealed class ServicesCommandModule : IAuthCommandModule
         return document;
     }
 
+    private static bool LooksMasked(string value)
+    {
+        return value.Contains("***", StringComparison.Ordinal) || value.All(x => x == '*');
+    }
+
+    private static void PrintSecretOutput(string secret, string[] args)
+    {
+        var showSecret = CommandModeHelpers.HasFlag(args, "--show-secret");
+        var secretOut = CommandModeHelpers.GetOption(args, "--secret-out");
+
+        if (!string.IsNullOrWhiteSpace(secretOut))
+        {
+            WriteSecureTextFileAsync(secretOut, secret).GetAwaiter().GetResult();
+            Console.WriteLine($"Secret written to '{secretOut}' with restricted file permissions when supported.");
+        }
+
+        if (showSecret)
+        {
+            Console.WriteLine($"Secret: {secret}");
+        }
+        else if (string.IsNullOrWhiteSpace(secretOut))
+        {
+            Console.WriteLine("Secret generated/updated successfully. It was not printed. Use --show-secret or --secret-out <file> if you need to capture it.");
+        }
+    }
+
+    private static async Task WriteSecureTextFileAsync(string path, string content)
+    {
+        var directory = Path.GetDirectoryName(path);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+
+        await File.WriteAllTextAsync(path, content, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        TryRestrictFilePermissions(path);
+    }
+
+    private static void TryRestrictFilePermissions(string path)
+    {
+        try
+        {
+            if (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS())
+            {
+                File.SetUnixFileMode(
+                    path,
+                    UnixFileMode.UserRead | UnixFileMode.UserWrite);
+            }
+        }
+        catch
+        {
+        }
+    }
+
     private static void PrintDetailedHelp()
     {
         Console.WriteLine("  services list");
-        Console.WriteLine("  services show <serviceId>");
+        Console.WriteLine("  services show <serviceId> [--include-secret]");
         Console.WriteLine("  services validate");
-        Console.WriteLine("  services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>]");
+        Console.WriteLine("  services create --service-id <id> [--secret <secret>] [--bytes <n>] [--realm <realmId>] [--show-secret] [--secret-out <file>]");
         Console.WriteLine("  services delete <serviceId>");
         Console.WriteLine("  services add-realm <serviceId> <realmId>");
         Console.WriteLine("  services remove-realm <serviceId> <realmId>");
-        Console.WriteLine("  services set-secret <serviceId> <secret>");
-        Console.WriteLine("  services rotate-secret <serviceId> [--bytes <n>]");
-        Console.WriteLine("  services export <file>");
+        Console.WriteLine("  services set-secret <serviceId> <secret> [--show-secret] [--secret-out <file>]");
+        Console.WriteLine("  services rotate-secret <serviceId> [--bytes <n>] [--show-secret] [--secret-out <file>]");
+        Console.WriteLine("  services export <file> [--include-secrets]");
         Console.WriteLine("  services import <file> [--replace]");
     }
 }
