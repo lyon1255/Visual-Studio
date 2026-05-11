@@ -120,8 +120,7 @@ public sealed class CharacterController : ControllerBase
             return Unauthorized(new { error = serviceError == string.Empty ? "Missing node authorization." : serviceError });
         }
 
-        if (authorizedByService && serviceContext is not null &&
-            !serviceContext.Roles.Contains(ServiceRoles.ZoneCharacterSave, StringComparer.OrdinalIgnoreCase))
+        if (!authorizedByService && serviceContext is null)
         {
             return Forbid();
         }

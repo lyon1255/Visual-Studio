@@ -73,6 +73,6 @@ public sealed class GameDataController : ControllerBase
             return false;
         }
 
-        return context is not null && context.Roles.Contains(ServiceRoles.RealmGameDataRead, StringComparer.OrdinalIgnoreCase);
+        return context is not null;
     }
 }

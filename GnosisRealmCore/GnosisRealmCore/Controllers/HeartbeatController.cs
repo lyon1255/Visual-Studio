@@ -34,8 +34,7 @@ public sealed class HeartbeatController : ControllerBase
             return Unauthorized(new { error = string.IsNullOrWhiteSpace(error) ? "Missing heartbeat authorization." : error });
         }
 
-        if (authorizedByService && serviceContext is not null &&
-            !serviceContext.Roles.Contains(ServiceRoles.ZoneHeartbeatWrite, StringComparer.OrdinalIgnoreCase))
+        if (authorizedByService && serviceContext is not null)
         {
             return Forbid();
         }

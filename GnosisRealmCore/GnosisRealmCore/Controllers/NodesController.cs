@@ -27,7 +27,7 @@ public sealed class NodesController : ControllerBase
             return Unauthorized(new { error });
         }
 
-        if (context is null || !context.Roles.Contains(ServiceRoles.NodeRegister, StringComparer.OrdinalIgnoreCase))
+        if (context is null)
         {
             return Forbid();
         }
@@ -70,7 +70,7 @@ public sealed class NodesController : ControllerBase
             return Unauthorized(new { error });
         }
 
-        if (context is null || !context.Roles.Contains(ServiceRoles.NodeHeartbeat, StringComparer.OrdinalIgnoreCase))
+        if (context is null)
         {
             return Forbid();
         }
@@ -97,7 +97,7 @@ public sealed class NodesController : ControllerBase
             return Unauthorized(new { error });
         }
 
-        if (context is null || !context.Roles.Contains(ServiceRoles.NodeCommandsRead, StringComparer.OrdinalIgnoreCase))
+        if (context is null)
         {
             return Forbid();
         }
@@ -132,7 +132,7 @@ public sealed class NodesController : ControllerBase
             return Unauthorized(new { error });
         }
 
-        if (context is null || !context.Roles.Contains(ServiceRoles.NodeCommandsRead, StringComparer.OrdinalIgnoreCase))
+        if (context is null)
         {
             return Forbid();
         }

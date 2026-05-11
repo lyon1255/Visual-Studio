@@ -18,7 +18,7 @@ public sealed class GameDataEntryDto
     public bool IsEnabled { get; set; } = true;
 }
 
-public sealed class GlobalGameDataVersionResponse
+public class GlobalGameDataVersionResponse
 {
     public int VersionNumber { get; set; }
     public string VersionTag { get; set; } = string.Empty;
@@ -26,7 +26,7 @@ public sealed class GlobalGameDataVersionResponse
     public DateTime PublishedAtUtc { get; set; }
 }
 
-public sealed class GlobalGameDataSnapshotResponse
+public class GlobalGameDataSnapshotResponse
 {
     public int VersionNumber { get; set; }
     public string VersionTag { get; set; } = string.Empty;

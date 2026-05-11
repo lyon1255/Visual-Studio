@@ -3,7 +3,7 @@ using GnosisRealmCore.Data;
 
 namespace GnosisRealmCore.Models;
 
-public sealed class CharacterListItemResponse
+public class CharacterListItemResponse
 {
     public int Id { get; set; }
     public string SteamId { get; set; } = string.Empty;
