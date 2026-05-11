@@ -1,0 +1,33 @@
+name: dotnet-build
+
+on:
+  push:
+    branches:
+      - main
+      - fix/**
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore GnosisAuthServer
+        run: dotnet restore GnosisAuthServer/GnosisAuthServer/GnosisAuthServer.csproj
+
+      - name: Build GnosisAuthServer
+        run: dotnet build GnosisAuthServer/GnosisAuthServer/GnosisAuthServer.csproj --configuration Release --no-restore
+
+      - name: Restore GnosisRealmCore
+        run: dotnet restore GnosisRealmCore/GnosisRealmCore/GnosisRealmCore.csproj
+
+      - name: Build GnosisRealmCore
+        run: dotnet build GnosisRealmCore/GnosisRealmCore/GnosisRealmCore.csproj --configuration Release --no-restore
