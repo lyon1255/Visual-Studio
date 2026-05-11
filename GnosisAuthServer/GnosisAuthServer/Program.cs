@@ -30,6 +30,7 @@ builder.Services.Configure<ServiceAuthOptions>(builder.Configuration.GetSection(
 builder.Services.Configure<SecurityOptions>(builder.Configuration.GetSection(SecurityOptions.SectionName));
 builder.Services.Configure<CorsOptions>(builder.Configuration.GetSection(CorsOptions.SectionName));
 builder.Services.Configure<AdminOptions>(builder.Configuration.GetSection(AdminOptions.SectionName));
+builder.Services.Configure<SchemaDeliveryOptions>(builder.Configuration.GetSection(SchemaDeliveryOptions.SectionName));
 
 var databaseOptions = builder.Configuration.GetSection(DatabaseOptions.SectionName).Get<DatabaseOptions>()
     ?? throw new InvalidOperationException("Database configuration is missing.");
@@ -73,6 +74,7 @@ builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
 builder.Services.AddScoped<IGameDataService, GameDataService>();
+builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
 builder.Services.AddSingleton<INonceStore>(sp =>
     new MemoryNonceStore(sp.GetRequiredService<MemoryCache>()));
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
@@ -154,6 +156,17 @@ builder.Services.AddRateLimiter(options =>
             factory: _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+
+    options.AddPolicy("realm-schema-read", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey: GetServicePartitionKey(context),
+            factory: _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
                 Window = TimeSpan.FromMinutes(1),
                 QueueLimit = 0,
                 AutoReplenishment = true
