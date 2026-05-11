@@ -285,8 +285,6 @@ Javasolt szerkezet:
     GnosisAuthServer
     GnosisAuthServer.pdb
     appsettings.json
-    appsettings.Development.json
-    appsettings.Production.json
     dotnet-tools.json
     keys/
       auth_private.pem
@@ -343,6 +341,7 @@ Feladata:
 - forwarded headers kezeles
 - Kestrel URL beallitas
 - middleware pipeline inditasa
+- production startup guardok ervenyesitese
 
 ### `Controllers/AuthController.cs`
 
@@ -405,6 +404,7 @@ Belso auth es vedelmi segedosztalyok.
 Peldak:
 - `HmacServiceRequestAuthenticator`
 - `MemoryNonceStore`
+- `RedisNonceStore`
 - `HeaderAdminRequestValidator`
 - `ServiceAuthHeaderNames`
 - `ServiceAuthContext`
@@ -442,6 +442,8 @@ Peldak:
 - `CorsOptions`
 - `AdminOptions`
 - `SchemaDeliveryOptions`
+- `NonceStoreOptions`
+- `AccountAccessOptions`
 
 ### `Sql/bootstrap.sql`
 
@@ -453,19 +455,18 @@ Leiras a JWT PEM kulcsokrol.
 
 ---
 
-## 7. appsettings konfiguracio leirasa
+## 7. appsettings es environment valtozok
 
 A projekt a kovetkezo forrasokbol olvas konfiguraciot:
 
 - `appsettings.json`
-- `appsettings.{Environment}.json`
 - `GNOSIS_AUTH_` prefixu environment valtozok
 
-Productionben a legfontosabb:
+Productionben a javasolt modell:
 
-```text
-/opt/gnosis/authapi/app/appsettings.Production.json
-```
+- a repo-ban csak **mintakonfig** maradjon
+- minden erzekeny ertek environment valtozobol jojjon
+- productionben a startup guard leallitja az alkalmazast, ha placeholder vagy hianyzo secret marad bent
 
 ### 7.1 `Urls`
 
@@ -484,55 +485,50 @@ Javaslat:
 
 ### 7.2 `Database`
 
-Pelda:
+`appsettings.json` mintaban:
 
 ```json
 "Database": {
-  "ConnectionString": "Server=127.0.0.1;Port=3306;Database=gnosis_auth;User=gnosis_auth;Password=CHANGE_ME;SslMode=Required;"
+  "ConnectionString": ""
 }
 ```
 
-Mit csinal:
-- ez a MySQL kapcsolat
+Productionben add meg env valtozobol, pelda:
 
-Mit kell modositani:
-- adatbazis nev
-- user
-- jelszo
+```bash
+GNOSIS_AUTH__Database__ConnectionString="Server=127.0.0.1;Port=3306;Database=gnosis_auth;User=gnosis_auth;Password=...;SslMode=Required;"
+```
 
 ### 7.3 `Jwt`
 
+A JWT kulcs fajlutakat tarthatod az `appsettings.json`-ban, de productionben ezek is johetnek env valtozobol.
+
 Pelda:
 
-```json
-"Jwt": {
-  "PrivateKeyPemPath": "./keys/auth_private.pem",
-  "PublicKeyPemPath": "./keys/auth_public.pem",
-  "Issuer": "Gnosis.Auth",
-  "Audience": "Gnosis.Clients",
-  "AccessTokenMinutes": 20,
-  "KeyId": "gnosis-auth-main"
-}
+```bash
+GNOSIS_AUTH__Jwt__PrivateKeyPemPath=/opt/gnosis/authapi/app/keys/auth_private.pem
+GNOSIS_AUTH__Jwt__PublicKeyPemPath=/opt/gnosis/authapi/app/keys/auth_public.pem
 ```
-
-Mit csinal:
-- JWT RSA kulcsok es token metadata
 
 ### 7.4 `Steam`
 
-Pelda:
+`appsettings.json` mintaban a `PublisherKey` legyen ures:
 
 ```json
 "Steam": {
   "Enabled": true,
   "AppId": 0,
-  "PublisherKey": "CHANGE_ME",
+  "PublisherKey": "",
   "AllowMockTicketsInDevelopment": false
 }
 ```
 
-Mit csinal:
-- Steam ticket validacio beallitasai
+Production pelda:
+
+```bash
+GNOSIS_AUTH__Steam__AppId=123456
+GNOSIS_AUTH__Steam__PublisherKey=your_real_steam_publisher_key
+```
 
 ### 7.5 `RealmRegistry`
 
@@ -545,13 +541,11 @@ Pelda:
 }
 ```
 
-Mit csinal:
-- realm lathatosagi szabalyok
-- heartbeat timeout
-
 ### 7.6 `ServiceAuth`
 
-Pelda:
+A service secret-ek ne maradjanak a fajlban.
+
+`appsettings.json` mintaban legyenek ures stringek:
 
 ```json
 "ServiceAuth": {
@@ -561,41 +555,68 @@ Pelda:
   "Clients": [
     {
       "ServiceId": "official-eu-realm-core",
-      "Secret": "CHANGE_ME_REALMCORE_SHARED_SECRET",
+      "Secret": "",
       "AllowedRealmIds": [ "official-eu-1" ]
     }
   ]
 }
 ```
 
-Mit csinal:
-- internal service-to-service auth
-- HMAC alapu hitelesites
-- nonce alapu replay vedelem
-- realm ownership ellenorzes `AllowedRealmIds` alapjan
+Production pelda:
 
-Fontos:
-- a leegyszerusitett modellben nincs role rendszer
-- minden RealmCore ugyanazzal a belso jogosultsagi modellel dolgozik
-- official/community kulonbseg nem itt van, hanem a `realms.is_official` mezoben
+```bash
+GNOSIS_AUTH__ServiceAuth__Clients__0__Secret=realmcore_secret_here
+GNOSIS_AUTH__ServiceAuth__Clients__1__Secret=community_secret_here
+```
 
-### 7.7 `Admin`
+### 7.7 `NonceStore`
 
 Pelda:
+
+```json
+"NonceStore": {
+  "UseDistributedCache": false,
+  "RedisConnectionString": "",
+  "RedisInstanceName": "gnosis-auth"
+}
+```
+
+Productionben ez legyen kotelezo:
+
+```bash
+GNOSIS_AUTH__NonceStore__UseDistributedCache=true
+GNOSIS_AUTH__NonceStore__RedisConnectionString=127.0.0.1:6379,abortConnect=false
+GNOSIS_AUTH__NonceStore__RedisInstanceName=gnosis-auth
+```
+
+Fontos:
+- productionben a startup guard leallitja az alkalmazast, ha a distributed nonce store nincs bekapcsolva
+- productionben a Redis kapcsolatnak indulaskor elerhetonek kell lennie
+
+### 7.8 `Admin`
+
+Az admin secret ne maradjon a fajlban.
+
+`appsettings.json` mintaban:
 
 ```json
 "Admin": {
   "Enabled": true,
   "HeaderName": "X-Gnosis-Admin-Key",
-  "ApiKey": "CHANGE_ME_ADMIN_KEY",
+  "ApiKey": "",
   "AllowedIpAddresses": [ "127.0.0.1" ]
 }
 ```
 
-Mit csinal:
-- admin endpointok vedelme
+Production pelda:
 
-### 7.8 `Security`
+```bash
+GNOSIS_AUTH__Admin__ApiKey=your_admin_secret
+GNOSIS_AUTH__Admin__AllowedIpAddresses__0=10.0.0.10
+GNOSIS_AUTH__Admin__AllowedIpAddresses__1=10.0.0.11
+```
+
+### 7.9 `Security`
 
 Pelda:
 
@@ -607,12 +628,14 @@ Pelda:
 }
 ```
 
-Mit csinal:
-- HTTPS policy
-- megbizhato proxyk
-- forwarded headers kezeles
+Production pelda:
 
-### 7.9 `Cors`
+```bash
+GNOSIS_AUTH__Security__RequireHttps=true
+GNOSIS_AUTH__Security__KnownProxies__0=127.0.0.1
+```
+
+### 7.10 `Cors`
 
 Pelda:
 
@@ -622,10 +645,17 @@ Pelda:
 }
 ```
 
-Mit csinal:
-- browser alapu eleresek CORS policy-ja
+### 7.11 `AccountAccess`
 
-### 7.10 `SchemaDelivery`
+Pelda:
+
+```json
+"AccountAccess": {
+  "CacheTtlSeconds": 30
+}
+```
+
+### 7.12 `SchemaDelivery`
 
 Pelda:
 
@@ -636,10 +666,6 @@ Pelda:
   "Channel": "realmcore"
 }
 ```
-
-Mit csinal:
-- megmondja, honnan olvassa az Auth API a migration fajlokat
-- ez a schema manifest es migration content endpoint forrasa
 
 ---
 
@@ -718,21 +744,27 @@ A Visual Studio publish output tartalmat toltsd fel ide:
 chmod +x /opt/gnosis/authapi/app/GnosisAuthServer
 ```
 
-### 10.4 appsettings.Production.json
+### 10.4 Environment valtozok beallitasa
 
-Hozd letre itt:
+Productionben a secretekhez env valtozokat hasznalj. Minimalis pelda:
 
-```text
-/opt/gnosis/authapi/app/appsettings.Production.json
+```bash
+export ASPNETCORE_ENVIRONMENT=Production
+export GNOSIS_AUTH__Database__ConnectionString="Server=127.0.0.1;Port=3306;Database=gnosis_auth;User=gnosis_auth;Password=...;SslMode=Required;"
+export GNOSIS_AUTH__Steam__AppId=123456
+export GNOSIS_AUTH__Steam__PublisherKey="..."
+export GNOSIS_AUTH__ServiceAuth__Clients__0__Secret="..."
+export GNOSIS_AUTH__ServiceAuth__Clients__1__Secret="..."
+export GNOSIS_AUTH__Admin__ApiKey="..."
+export GNOSIS_AUTH__NonceStore__UseDistributedCache=true
+export GNOSIS_AUTH__NonceStore__RedisConnectionString="127.0.0.1:6379,abortConnect=false"
 ```
-
-Es production ertekekkel ird felul a default configot.
 
 ### 10.5 Kezi inditas
 
 ```bash
 cd /opt/gnosis/authapi/app
-ASPNETCORE_ENVIRONMENT=Production ./GnosisAuthServer
+./GnosisAuthServer
 ```
 
 ---
@@ -752,6 +784,8 @@ ExecStart=/opt/gnosis/authapi/app/GnosisAuthServer
 User=gnosisauth
 Group=gnosisauth
 Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=GNOSIS_AUTH__NonceStore__UseDistributedCache=true
+Environment=GNOSIS_AUTH__NonceStore__RedisConnectionString=127.0.0.1:6379,abortConnect=false
 Restart=always
 RestartSec=5
 SyslogIdentifier=gnosis-authapi
@@ -759,6 +793,8 @@ SyslogIdentifier=gnosis-authapi
 [Install]
 WantedBy=multi-user.target
 ```
+
+A tobbi secretet erdemes `EnvironmentFile=` vagy systemd credential file segitsegevel beadni.
 
 ---
 
@@ -815,6 +851,7 @@ A jelenlegi Auth API security modellje:
 - RSA alapu JWT token kiadas
 - internal HMAC service auth
 - nonce alapu replay vedelem
+- Redis-backed replay protection productionben
 - admin header + IP whitelist
 - rate limiting
 - loopback bind javasolt
@@ -822,6 +859,7 @@ A jelenlegi Auth API security modellje:
 - realm ownership `AllowedRealmIds` alapjan
 - official/community status DB-bol
 - schema migration endpoint internal marad
+- production startup guardok tiltjak a gyenge vagy placeholder configot
 
 ---
 
@@ -880,19 +918,31 @@ Oka:
 - nincs lefuttatva a bootstrap schema
 - hibas DB connection string
 
+### `Production startup validation failed`
+
+Oka:
+- ures vagy placeholder secret maradt a configban
+- a Redis nonce store nincs bekapcsolva productionben
+- az admin IP allowlist ures
+- a HTTPS policy hibas
+
 ---
 
 ## 17. Production checklist
 
 Telepites elott:
-- csereld a `CHANGE_ME` ertekeket
+- allitsd be env valtozobol a DB connection stringet
+- allitsd be env valtozobol a Steam PublisherKey-t
+- allitsd be env valtozobol a service secret-eket
+- allitsd be env valtozobol az admin secretet
+- allitsd be env valtozobol a Redis kapcsolatot
+- productionben legyen `GNOSIS_AUTH__NonceStore__UseDistributedCache=true`
 - generalj RSA kulcspart
-- allitsd be a valos Steam AppId es PublisherKey ertekeket
-- allitsd be a valos admin API kulcsot
-- allitsd be a helyes service secret-eket
+- allitsd be a valos Steam AppId erteket
 - allitsd be a helyes `AllowedRealmIds` ertekeket
 - ellenorizd a `SchemaDelivery` mappat es fajlneveket
 - tedd az Auth API-t Nginx moge
+- korlatozd az admin endpointot halozati szinten is
 - engedelyezd a systemd service-t
 - teszteld a `live` es `ready` endpointot
 
@@ -909,5 +959,6 @@ A `GnosisAuthServer` jelenlegi leegyszerusitett modellje:
 - internal schema manifestet es migration tartalmat ad a RealmCore-nak
 - admin oldalon kezeli a realm metadata-t, koztuk az `is_official` allapotot
 - systemd + Nginx mogotti Linuxos uzemre van tervezve
+- productionben env-var alapu secret kezelesre es Redis-backed replay vedelemre van felkeszitve
 
 Ez a README csak a **GnosisAuthServer** projektre vonatkozik.
