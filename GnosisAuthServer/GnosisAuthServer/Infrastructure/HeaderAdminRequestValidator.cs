@@ -30,6 +30,7 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
     {
         if (!_options.Enabled)
         {
+            _logger.LogWarning("Admin authorization rejected because admin API is disabled. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Admin API is disabled.");
         }
 
@@ -44,6 +45,9 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
 
         if (!RequestIpAllowed(request))
         {
+            _logger.LogWarning("Admin authorization rejected because remote IP is not allowed. Path={Path} RemoteIp={RemoteIp}",
+                request.Path,
+                request.HttpContext.Connection.RemoteIpAddress?.ToString());
             return AdminAuthorizationResult.Failure("Admin IP is not allowed.");
         }
 
@@ -67,22 +71,26 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
             string.IsNullOrWhiteSpace(signatureHex) ||
             string.IsNullOrWhiteSpace(bodyHash))
         {
+            _logger.LogWarning("Admin authorization rejected because required HMAC headers are missing. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Missing admin authentication headers.");
         }
 
         if (string.IsNullOrWhiteSpace(_options.ApiKey))
         {
+            _logger.LogError("Admin authorization rejected because the HMAC secret is not configured.");
             return AdminAuthorizationResult.Failure("Admin HMAC secret is not configured.");
         }
 
         if (!long.TryParse(timestampRaw, out var unixTime))
         {
+            _logger.LogWarning("Admin authorization rejected because timestamp format is invalid. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin timestamp.");
         }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (Math.Abs(now - unixTime) > _options.AllowedClockSkewSeconds)
         {
+            _logger.LogWarning("Admin authorization rejected because timestamp is out of range. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Admin timestamp out of range.");
         }
 
@@ -103,6 +111,7 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
 
         if (!string.Equals(bodyHash, computedBodyHash, StringComparison.OrdinalIgnoreCase))
         {
+            _logger.LogWarning("Admin authorization rejected because body hash mismatch. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin body hash.");
         }
 
@@ -121,6 +130,7 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
         }
         catch (FormatException)
         {
+            _logger.LogWarning("Admin authorization rejected because signature format is invalid. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin signature format.");
         }
 
@@ -129,14 +139,19 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
 
         if (!CryptographicOperations.FixedTimeEquals(computedSignature, receivedSignature))
         {
+            _logger.LogWarning("Admin authorization rejected because signature verification failed. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin signature.");
         }
 
         if (!_nonceStore.TryUseNonce("admin", nonce, TimeSpan.FromSeconds(_options.NonceTtlSeconds)))
         {
+            _logger.LogWarning("Admin authorization replay detected. Path={Path} Nonce={Nonce}", request.Path, nonce);
             return AdminAuthorizationResult.Failure("Admin replay detected.");
         }
 
+        _logger.LogInformation("Admin authorization succeeded. Path={Path} RemoteIp={RemoteIp}",
+            request.Path,
+            request.HttpContext.Connection.RemoteIpAddress?.ToString());
         return AdminAuthorizationResult.Success();
     }
 
@@ -144,12 +159,14 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
     {
         if (!request.Headers.TryGetValue(_options.HeaderName, out var values))
         {
+            _logger.LogWarning("Admin authorization rejected because legacy admin header is missing. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Missing admin header.");
         }
 
         var incoming = values.ToString();
         if (string.IsNullOrWhiteSpace(_options.ApiKey) || string.IsNullOrWhiteSpace(incoming))
         {
+            _logger.LogWarning("Admin authorization rejected because legacy admin key is invalid or missing. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin key.");
         }
 
@@ -157,9 +174,13 @@ public sealed class HeaderAdminRequestValidator : IAdminRequestValidator
         var actualBytes = Encoding.UTF8.GetBytes(incoming);
         if (!CryptographicOperations.FixedTimeEquals(expectedBytes, actualBytes))
         {
+            _logger.LogWarning("Admin authorization rejected because legacy admin key comparison failed. Path={Path}", request.Path);
             return AdminAuthorizationResult.Failure("Invalid admin key.");
         }
 
+        _logger.LogInformation("Admin authorization succeeded using legacy admin key flow. Path={Path} RemoteIp={RemoteIp}",
+            request.Path,
+            request.HttpContext.Connection.RemoteIpAddress?.ToString());
         return AdminAuthorizationResult.Success();
     }
 
