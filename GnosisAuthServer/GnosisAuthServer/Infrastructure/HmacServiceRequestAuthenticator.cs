@@ -21,15 +21,11 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
         _logger = logger;
     }
 
-    public bool TryAuthenticate(HttpRequest request, out ServiceAuthContext? context, out string error)
+    public async Task<ServiceAuthenticationResult> AuthenticateAsync(HttpRequest request, CancellationToken cancellationToken)
     {
-        context = null;
-        error = string.Empty;
-
         if (!_options.Enabled)
         {
-            context = new ServiceAuthContext("disabled", Array.Empty<string>());
-            return true;
+            return ServiceAuthenticationResult.Success(new ServiceAuthContext("disabled", Array.Empty<string>()));
         }
 
         var serviceId = request.Headers[ServiceAuthHeaderNames.ServiceId].ToString();
@@ -44,42 +40,54 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
             string.IsNullOrWhiteSpace(signatureHex) ||
             string.IsNullOrWhiteSpace(bodyHash))
         {
-            error = "Missing service authentication headers.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Missing service authentication headers.");
         }
 
         var client = _options.Clients.FirstOrDefault(x => string.Equals(x.ServiceId, serviceId, StringComparison.Ordinal));
         if (client is null || string.IsNullOrWhiteSpace(client.Secret))
         {
-            error = "Unknown service identity.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Unknown service identity.");
         }
 
         if (!long.TryParse(timestampRaw, out var unixTime))
         {
-            error = "Invalid timestamp.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Invalid timestamp.");
         }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (Math.Abs(now - unixTime) > _options.AllowedClockSkewSeconds)
         {
-            error = "Timestamp out of range.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Timestamp out of range.");
         }
 
-        if (!_nonceStore.TryUseNonce(serviceId, nonce, TimeSpan.FromSeconds(_options.NonceTtlSeconds)))
+        string computedBodyHash;
+        try
         {
-            error = "Replay detected.";
-            return false;
+            computedBodyHash = await ComputeBodyHashAsync(request, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Service authentication failed for {ServiceId}: body hash computation error.", serviceId);
+            return ServiceAuthenticationResult.Failure("Unable to verify request body.");
+        }
+
+        if (!string.Equals(bodyHash, computedBodyHash, StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogWarning("Service authentication failed for {ServiceId}: body hash mismatch.", serviceId);
+            return ServiceAuthenticationResult.Failure("Invalid body hash.");
         }
 
         var canonical = string.Join("\n",
             request.Method.ToUpperInvariant(),
             request.Path.Value ?? "/",
+            request.QueryString.HasValue ? request.QueryString.Value! : string.Empty,
             timestampRaw,
             nonce,
-            bodyHash);
+            computedBodyHash.ToLowerInvariant());
 
         byte[] receivedSignature;
         try
@@ -88,8 +96,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
         }
         catch (FormatException)
         {
-            error = "Invalid signature format.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Invalid signature format.");
         }
 
         using var hmac = new HMACSHA256(Encoding.UTF8.GetBytes(client.Secret));
@@ -98,11 +105,26 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
         if (!CryptographicOperations.FixedTimeEquals(computedSignature, receivedSignature))
         {
             _logger.LogWarning("Service authentication failed for {ServiceId}: invalid signature.", serviceId);
-            error = "Invalid signature.";
-            return false;
+            return ServiceAuthenticationResult.Failure("Invalid signature.");
         }
 
-        context = new ServiceAuthContext(client.ServiceId, client.AllowedRealmIds);
-        return true;
+        if (!_nonceStore.TryUseNonce(serviceId, nonce, TimeSpan.FromSeconds(_options.NonceTtlSeconds)))
+        {
+            return ServiceAuthenticationResult.Failure("Replay detected.");
+        }
+
+        return ServiceAuthenticationResult.Success(new ServiceAuthContext(client.ServiceId, client.AllowedRealmIds));
+    }
+
+    private static async Task<string> ComputeBodyHashAsync(HttpRequest request, CancellationToken cancellationToken)
+    {
+        request.EnableBuffering();
+        request.Body.Position = 0;
+
+        using var sha256 = SHA256.Create();
+        var hashBytes = await sha256.ComputeHashAsync(request.Body, cancellationToken);
+
+        request.Body.Position = 0;
+        return Convert.ToHexString(hashBytes).ToLowerInvariant();
     }
 }
