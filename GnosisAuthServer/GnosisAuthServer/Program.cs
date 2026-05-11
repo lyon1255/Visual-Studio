@@ -75,6 +75,7 @@ builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
 builder.Services.AddScoped<IGameDataService, GameDataService>();
+builder.Services.AddScoped<IAccountAccessValidator, CachedAccountAccessValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
 builder.Services.AddSingleton<INonceStore>(sp =>
     new MemoryNonceStore(sp.GetRequiredService<MemoryCache>()));
@@ -109,6 +110,23 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
             ValidateIssuerSigningKey = true,
             IssuerSigningKey = rsaKeyProvider.GetValidationKey(),
             ClockSkew = TimeSpan.FromSeconds(30)
+        };
+
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var steamId = context.Principal?.FindFirst("sub")?.Value
+                    ?? context.Principal?.Identity?.Name;
+
+                var accountAccessValidator = context.HttpContext.RequestServices.GetRequiredService<IAccountAccessValidator>();
+                var result = await accountAccessValidator.ValidateAsync(steamId ?? string.Empty, context.HttpContext.RequestAborted);
+
+                if (!result.IsAllowed)
+                {
+                    context.Fail(result.DenialReason ?? "Account access denied.");
+                }
+            }
         };
     });
 
