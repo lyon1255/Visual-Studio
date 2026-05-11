@@ -13,7 +13,6 @@ internal sealed class DoctorCommandModule : IAuthCommandModule
     {
         var dbContext = context.Services.GetRequiredService<AuthDbContext>();
         var jwtOptions = context.Services.GetRequiredService<IOptions<JwtOptions>>().Value;
-        var schemaOptions = context.Services.GetRequiredService<IOptions<SchemaDeliveryOptions>>().Value;
         var serviceAuthOptions = context.Services.GetRequiredService<IOptions<ServiceAuthOptions>>().Value;
 
         Console.WriteLine("Doctor report");
@@ -22,8 +21,6 @@ internal sealed class DoctorCommandModule : IAuthCommandModule
         Console.WriteLine($"ContentRoot: {context.App.Environment.ContentRootPath}");
         Console.WriteLine($"JWT private key: {jwtOptions.PrivateKeyPemPath}");
         Console.WriteLine($"JWT public key: {jwtOptions.PublicKeyPemPath}");
-        Console.WriteLine($"Schema enabled: {schemaOptions.Enabled}");
-        Console.WriteLine($"Schema directory: {schemaOptions.DirectoryPath}");
         Console.WriteLine($"Service auth enabled: {serviceAuthOptions.Enabled}");
         Console.WriteLine($"Configured service clients: {serviceAuthOptions.Clients.Count}");
 
@@ -31,12 +28,6 @@ internal sealed class DoctorCommandModule : IAuthCommandModule
         Console.WriteLine($"Database: {(dbOk ? "OK" : "FAILED")}");
         Console.WriteLine($"JWT private key exists: {File.Exists(jwtOptions.PrivateKeyPemPath)}");
         Console.WriteLine($"JWT public key exists: {File.Exists(jwtOptions.PublicKeyPemPath)}");
-
-        var schemaDirectory = Path.IsPathRooted(schemaOptions.DirectoryPath)
-            ? schemaOptions.DirectoryPath
-            : Path.Combine(context.App.Environment.ContentRootPath, schemaOptions.DirectoryPath);
-
-        Console.WriteLine($"Schema directory exists: {Directory.Exists(schemaDirectory)}");
 
         return dbOk ? 0 : 1;
     }
