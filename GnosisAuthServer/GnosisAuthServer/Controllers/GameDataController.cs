@@ -28,9 +28,10 @@ public sealed class GameDataController : ControllerBase
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetVersion(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
+        var authResult = await _serviceRequestAuthenticator.AuthenticateAsync(Request, cancellationToken);
+        if (!authResult.IsAuthenticated)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
@@ -42,9 +43,10 @@ public sealed class GameDataController : ControllerBase
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetSnapshot(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
+        var authResult = await _serviceRequestAuthenticator.AuthenticateAsync(Request, cancellationToken);
+        if (!authResult.IsAuthenticated)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         var snapshot = await _gameDataService.GetCurrentSnapshotAsync(cancellationToken);
@@ -56,9 +58,10 @@ public sealed class GameDataController : ControllerBase
     [EnableRateLimiting("realm-gamedata-read")]
     public async Task<IActionResult> GetPrefabRegistry(CancellationToken cancellationToken)
     {
-        if (!_serviceRequestAuthenticator.TryAuthenticate(Request, out _, out var error))
+        var authResult = await _serviceRequestAuthenticator.AuthenticateAsync(Request, cancellationToken);
+        if (!authResult.IsAuthenticated)
         {
-            return Unauthorized(new { error });
+            return Unauthorized(new { error = authResult.Error });
         }
 
         var version = await _gameDataService.GetCurrentVersionAsync(cancellationToken);
