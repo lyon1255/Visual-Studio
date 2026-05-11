@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using System.Net;
@@ -61,16 +62,19 @@ builder.Services.AddDbContext<AuthDbContext>(options =>
 var rsaKeyProvider = new FileRsaKeyProvider(Options.Create(jwtOptions));
 builder.Services.AddSingleton<IRsaKeyProvider>(rsaKeyProvider);
 
-builder.Services.AddMemoryCache(options =>
-{
-    options.SizeLimit = 10_000;
-});
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<MemoryCache>(_ =>
+    new MemoryCache(new MemoryCacheOptions
+    {
+        SizeLimit = 10_000
+    }));
 
 builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
 builder.Services.AddScoped<IGameDataService, GameDataService>();
-builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
+builder.Services.AddSingleton<INonceStore>(sp =>
+    new MemoryNonceStore(sp.GetRequiredService<MemoryCache>()));
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<IIpBanCacheService, IpBanCacheService>();
