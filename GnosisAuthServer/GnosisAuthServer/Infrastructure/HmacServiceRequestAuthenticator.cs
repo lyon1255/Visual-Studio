@@ -40,23 +40,29 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
             string.IsNullOrWhiteSpace(signatureHex) ||
             string.IsNullOrWhiteSpace(bodyHash))
         {
+            _logger.LogWarning("Service authentication rejected due to missing headers. Path={Path} RemoteIp={RemoteIp}",
+                request.Path,
+                request.HttpContext.Connection.RemoteIpAddress?.ToString());
             return ServiceAuthenticationResult.Failure("Missing service authentication headers.");
         }
 
         var client = _options.Clients.FirstOrDefault(x => string.Equals(x.ServiceId, serviceId, StringComparison.Ordinal));
         if (client is null || string.IsNullOrWhiteSpace(client.Secret))
         {
+            _logger.LogWarning("Service authentication rejected for unknown service identity {ServiceId}. Path={Path}", serviceId, request.Path);
             return ServiceAuthenticationResult.Failure("Unknown service identity.");
         }
 
         if (!long.TryParse(timestampRaw, out var unixTime))
         {
+            _logger.LogWarning("Service authentication rejected for {ServiceId}: invalid timestamp format.", serviceId);
             return ServiceAuthenticationResult.Failure("Invalid timestamp.");
         }
 
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (Math.Abs(now - unixTime) > _options.AllowedClockSkewSeconds)
         {
+            _logger.LogWarning("Service authentication rejected for {ServiceId}: timestamp out of range.", serviceId);
             return ServiceAuthenticationResult.Failure("Timestamp out of range.");
         }
 
@@ -77,7 +83,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
 
         if (!string.Equals(bodyHash, computedBodyHash, StringComparison.OrdinalIgnoreCase))
         {
-            _logger.LogWarning("Service authentication failed for {ServiceId}: body hash mismatch.", serviceId);
+            _logger.LogWarning("Service authentication rejected for {ServiceId}: body hash mismatch.", serviceId);
             return ServiceAuthenticationResult.Failure("Invalid body hash.");
         }
 
@@ -96,6 +102,7 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
         }
         catch (FormatException)
         {
+            _logger.LogWarning("Service authentication rejected for {ServiceId}: invalid signature format.", serviceId);
             return ServiceAuthenticationResult.Failure("Invalid signature format.");
         }
 
@@ -104,15 +111,17 @@ public sealed class HmacServiceRequestAuthenticator : IServiceRequestAuthenticat
 
         if (!CryptographicOperations.FixedTimeEquals(computedSignature, receivedSignature))
         {
-            _logger.LogWarning("Service authentication failed for {ServiceId}: invalid signature.", serviceId);
+            _logger.LogWarning("Service authentication rejected for {ServiceId}: invalid signature.", serviceId);
             return ServiceAuthenticationResult.Failure("Invalid signature.");
         }
 
         if (!_nonceStore.TryUseNonce(serviceId, nonce, TimeSpan.FromSeconds(_options.NonceTtlSeconds)))
         {
+            _logger.LogWarning("Service authentication replay detected for {ServiceId}. Nonce={Nonce}", serviceId, nonce);
             return ServiceAuthenticationResult.Failure("Replay detected.");
         }
 
+        _logger.LogInformation("Service authentication succeeded for {ServiceId}. Path={Path}", serviceId, request.Path);
         return ServiceAuthenticationResult.Success(new ServiceAuthContext(client.ServiceId, client.AllowedRealmIds));
     }
 
