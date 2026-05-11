@@ -1,3 +1,4 @@
+using Gnosis.AuthServer.Application.Services;
 using GnosisAuthServer.CommandMode;
 using GnosisAuthServer.CommandMode.Modules;
 using GnosisAuthServer.Data;
@@ -72,9 +73,8 @@ builder.Services.AddSingleton<INonceStore, MemoryNonceStore>();
 builder.Services.AddSingleton<IServiceRequestAuthenticator, HmacServiceRequestAuthenticator>();
 builder.Services.AddSingleton<IAdminRequestValidator, HeaderAdminRequestValidator>();
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
+
 builder.Services.AddSingleton<IAuthCommandModule, VersionCommandModule>();
-
-
 builder.Services.AddSingleton<IAuthCommandModule, DoctorCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, DbCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, JwtCommandModule>();
@@ -83,6 +83,7 @@ builder.Services.AddSingleton<IAuthCommandModule, RealmsCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, ServicesCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, GameDataCommandModule>();
 builder.Services.AddSingleton<IAuthCommandModule, SchemaCommandModule>();
+builder.Services.AddSingleton<IAuthCommandModule, SecurityCommandModule>();
 
 builder.Services.AddControllers();
 
@@ -231,6 +232,8 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
+await ValidateStartupAsync(app);
+
 var commandExitCode = await AuthCommandModeRunner.TryRunAsync(app, args);
 if (commandExitCode.HasValue)
 {
@@ -264,8 +267,7 @@ app.Use(async (context, next) =>
     var remoteIp = context.Connection.RemoteIpAddress?.ToString();
     if (!string.IsNullOrWhiteSpace(remoteIp))
     {
-        await using var scope = app.Services.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
+        var dbContext = context.RequestServices.GetRequiredService<AuthDbContext>();
         var nowUtc = DateTime.UtcNow;
 
         var isBlocked = await dbContext.BannedIpAddresses
@@ -293,20 +295,57 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-using (var scope = app.Services.CreateScope())
-{
-    var dbContext = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
-    var canConnect = await dbContext.Database.CanConnectAsync();
-    if (!canConnect)
-    {
-        throw new InvalidOperationException("Auth database connection check failed during startup.");
-    }
-}
-
 app.Run();
 
 static string GetServicePartitionKey(HttpContext context)
 {
     var serviceId = context.Request.Headers[ServiceAuthHeaderNames.ServiceId].ToString();
     return string.IsNullOrWhiteSpace(serviceId) ? "unknown" : serviceId;
+}
+
+static async Task ValidateStartupAsync(WebApplication app)
+{
+    using var scope = app.Services.CreateScope();
+
+    var dbContext = scope.ServiceProvider.GetRequiredService<AuthDbContext>();
+    var canConnect = await dbContext.Database.CanConnectAsync();
+    if (!canConnect)
+    {
+        throw new InvalidOperationException("Auth database connection check failed during startup.");
+    }
+
+    var modules = scope.ServiceProvider.GetServices<IAuthCommandModule>().ToList();
+    if (modules.Count == 0)
+    {
+        throw new InvalidOperationException("No command modules are registered.");
+    }
+
+    var expectedModuleTypes = new[]
+    {
+        typeof(VersionCommandModule),
+        typeof(DoctorCommandModule),
+        typeof(DbCommandModule),
+        typeof(JwtCommandModule),
+        typeof(EnvironmentCommandModule),
+        typeof(RealmsCommandModule),
+        typeof(ServicesCommandModule),
+        typeof(GameDataCommandModule),
+        typeof(SchemaCommandModule),
+        typeof(SecurityCommandModule)
+    };
+
+    var registeredModuleTypes = modules
+        .Select(x => x.GetType())
+        .ToHashSet();
+
+    var missingModules = expectedModuleTypes
+        .Where(x => !registeredModuleTypes.Contains(x))
+        .Select(x => x.Name)
+        .ToArray();
+
+    if (missingModules.Length > 0)
+    {
+        throw new InvalidOperationException(
+            $"Missing command module registrations: {string.Join(", ", missingModules)}");
+    }
 }

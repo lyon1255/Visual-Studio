@@ -1,3 +1,4 @@
+using Gnosis.AuthServer.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 
 namespace GnosisAuthServer.Data;
@@ -13,6 +14,7 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
     public DbSet<DbAura> GameAuras => Set<DbAura>();
     public DbSet<GameDataVersion> GameDataVersions => Set<GameDataVersion>();
     public DbSet<BannedIpAddress> BannedIpAddresses => Set<BannedIpAddress>();
+    public DbSet<RealmNode> RealmNodes => Set<RealmNode>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -35,5 +37,6 @@ public sealed class AuthDbContext(DbContextOptions<AuthDbContext> options) : DbC
 
         modelBuilder.Entity<GameDataVersion>().HasIndex(x => x.VersionNumber).IsUnique();
         modelBuilder.Entity<GameDataVersion>().HasIndex(x => x.PublishedAtUtc);
+        base.OnModelCreating(modelBuilder);
     }
 }

@@ -1,163 +1,302 @@
+using Gnosis.AuthServer.Domain.Entities;
 using GnosisAuthServer.Data;
-using GnosisAuthServer.Models;
-using GnosisAuthServer.Options;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
-namespace GnosisAuthServer.Services;
-
-public sealed class RealmRegistryService : IRealmRegistryService
+namespace Gnosis.AuthServer.Application.Services
 {
-    private readonly AuthDbContext _dbContext;
-    private readonly RealmRegistryOptions _options;
-    private readonly ILogger<RealmRegistryService> _logger;
-
-    public RealmRegistryService(
-        AuthDbContext dbContext,
-        IOptions<RealmRegistryOptions> options,
-        ILogger<RealmRegistryService> logger)
+    public sealed class RealmRegistryService
     {
-        _dbContext = dbContext;
-        _options = options.Value;
-        _logger = logger;
+        private readonly AuthDbContext _dbContext;
+        private readonly ILogger<RealmRegistryService> _logger;
+
+        public RealmRegistryService(AuthDbContext dbContext, ILogger<RealmRegistryService> logger)
+        {
+            _dbContext = dbContext;
+            _logger = logger;
+        }
+
+        public async Task<RealmRegistrationResult> RegisterOrUpdateAsync(
+            RealmRegistrationRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            ValidateRegistrationRequest(request);
+
+            string normalizedPublicUrl = NormalizeBaseUrl(request.PublicBaseUrl);
+            string? normalizedInternalUrl = string.IsNullOrWhiteSpace(request.InternalBaseUrl)
+                ? null
+                : NormalizeBaseUrl(request.InternalBaseUrl);
+
+            RealmNode? existingRealm = await _dbContext.RealmNodes
+                .SingleOrDefaultAsync(x => x.RealmId == request.RealmId, cancellationToken);
+
+            if (existingRealm is null)
+            {
+                var newRealm = new RealmNode
+                {
+                    RealmId = request.RealmId.Trim(),
+                    Name = request.Name.Trim(),
+                    Region = request.Region.Trim(),
+                    PublicBaseUrl = normalizedPublicUrl,
+                    InternalBaseUrl = normalizedInternalUrl,
+                    ServiceSecretHash = HashSecret(request.ServiceSecret),
+                    Enabled = true,
+                    Status = "offline",
+                    CurrentPlayers = 0,
+                    MaxPlayers = request.MaxPlayers,
+                    BuildVersion = request.BuildVersion?.Trim(),
+                    ProtocolVersion = request.ProtocolVersion,
+                    LastHeartbeatUtc = null,
+                    CreatedAtUtc = DateTime.UtcNow,
+                    UpdatedAtUtc = DateTime.UtcNow
+                };
+
+                _dbContext.RealmNodes.Add(newRealm);
+                await _dbContext.SaveChangesAsync(cancellationToken);
+
+                _logger.LogInformation(
+                    "Registered new realm. RealmId={RealmId}, Region={Region}, PublicBaseUrl={PublicBaseUrl}",
+                    newRealm.RealmId,
+                    newRealm.Region,
+                    newRealm.PublicBaseUrl);
+
+                return new RealmRegistrationResult(
+                    newRealm.RealmId,
+                    Created: true,
+                    Enabled: newRealm.Enabled,
+                    Status: newRealm.Status);
+            }
+
+            existingRealm.Name = request.Name.Trim();
+            existingRealm.Region = request.Region.Trim();
+            existingRealm.PublicBaseUrl = normalizedPublicUrl;
+            existingRealm.InternalBaseUrl = normalizedInternalUrl;
+            existingRealm.MaxPlayers = request.MaxPlayers;
+            existingRealm.BuildVersion = request.BuildVersion?.Trim();
+            existingRealm.ProtocolVersion = request.ProtocolVersion;
+            existingRealm.UpdatedAtUtc = DateTime.UtcNow;
+
+            if (!string.IsNullOrWhiteSpace(request.ServiceSecret))
+            {
+                existingRealm.ServiceSecretHash = HashSecret(request.ServiceSecret);
+            }
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            _logger.LogInformation(
+                "Updated realm registration. RealmId={RealmId}, Enabled={Enabled}, Status={Status}",
+                existingRealm.RealmId,
+                existingRealm.Enabled,
+                existingRealm.Status);
+
+            return new RealmRegistrationResult(
+                existingRealm.RealmId,
+                Created: false,
+                Enabled: existingRealm.Enabled,
+                Status: existingRealm.Status);
+        }
+
+        public async Task<bool> VerifyServiceSecretAsync(
+            string realmId,
+            string providedSecret,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(realmId) || string.IsNullOrWhiteSpace(providedSecret))
+            {
+                return false;
+            }
+
+            RealmNode? realm = await _dbContext.RealmNodes
+                .AsNoTracking()
+                .SingleOrDefaultAsync(x => x.RealmId == realmId && x.Enabled, cancellationToken);
+
+            if (realm is null)
+            {
+                return false;
+            }
+
+            string providedHash = HashSecret(providedSecret);
+
+            return FixedTimeEquals(realm.ServiceSecretHash, providedHash);
+        }
+
+        public async Task<RealmHeartbeatResult> UpdateHeartbeatAsync(
+            RealmHeartbeatRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(request.RealmId))
+            {
+                throw new ArgumentException("RealmId is required.", nameof(request.RealmId));
+            }
+
+            RealmNode? realm = await _dbContext.RealmNodes
+                .SingleOrDefaultAsync(x => x.RealmId == request.RealmId, cancellationToken);
+
+            if (realm is null)
+            {
+                throw new InvalidOperationException($"Realm '{request.RealmId}' was not found.");
+            }
+
+            if (!realm.Enabled)
+            {
+                throw new InvalidOperationException($"Realm '{request.RealmId}' is disabled.");
+            }
+
+            realm.Status = string.IsNullOrWhiteSpace(request.Status)
+                ? "online"
+                : request.Status.Trim().ToLowerInvariant();
+
+            realm.CurrentPlayers = Math.Max(0, request.CurrentPlayers);
+            realm.MaxPlayers = Math.Max(0, request.MaxPlayers);
+            realm.BuildVersion = request.BuildVersion?.Trim();
+            realm.ProtocolVersion = request.ProtocolVersion;
+            realm.LastHeartbeatUtc = DateTime.UtcNow;
+            realm.UpdatedAtUtc = DateTime.UtcNow;
+
+            await _dbContext.SaveChangesAsync(cancellationToken);
+
+            return new RealmHeartbeatResult(
+                realm.RealmId,
+                realm.Status,
+                realm.CurrentPlayers,
+                realm.MaxPlayers,
+                realm.LastHeartbeatUtc);
+        }
+
+        public async Task<RealmSummary[]> GetEnabledRealmsAsync(CancellationToken cancellationToken = default)
+        {
+            return await _dbContext.RealmNodes
+                .AsNoTracking()
+                .Where(x => x.Enabled)
+                .OrderBy(x => x.Region)
+                .ThenBy(x => x.Name)
+                .Select(x => new RealmSummary(
+                    x.RealmId,
+                    x.Name,
+                    x.Region,
+                    x.PublicBaseUrl,
+                    x.Status,
+                    x.CurrentPlayers,
+                    x.MaxPlayers,
+                    x.LastHeartbeatUtc))
+                .ToArrayAsync(cancellationToken);
+        }
+
+        private static void ValidateRegistrationRequest(RealmRegistrationRequest request)
+        {
+            if (string.IsNullOrWhiteSpace(request.RealmId))
+            {
+                throw new ArgumentException("RealmId is required.", nameof(request.RealmId));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Name))
+            {
+                throw new ArgumentException("Name is required.", nameof(request.Name));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.Region))
+            {
+                throw new ArgumentException("Region is required.", nameof(request.Region));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.PublicBaseUrl))
+            {
+                throw new ArgumentException("PublicBaseUrl is required.", nameof(request.PublicBaseUrl));
+            }
+
+            if (string.IsNullOrWhiteSpace(request.ServiceSecret))
+            {
+                throw new ArgumentException("ServiceSecret is required.", nameof(request.ServiceSecret));
+            }
+
+            if (request.ProtocolVersion <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(request.ProtocolVersion), "ProtocolVersion must be greater than 0.");
+            }
+
+            if (request.MaxPlayers < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(request.MaxPlayers), "MaxPlayers cannot be negative.");
+            }
+        }
+
+        private static string NormalizeBaseUrl(string url)
+        {
+            string trimmed = url.Trim();
+
+            if (!Uri.TryCreate(trimmed, UriKind.Absolute, out Uri? parsed))
+            {
+                throw new ArgumentException($"Invalid base url: {url}");
+            }
+
+            if (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps)
+            {
+                throw new ArgumentException($"Unsupported base url scheme: {parsed.Scheme}");
+            }
+
+            return parsed.ToString().TrimEnd('/');
+        }
+
+        private static string HashSecret(string secret)
+        {
+            byte[] bytes = Encoding.UTF8.GetBytes(secret.Trim());
+            byte[] hash = SHA256.HashData(bytes);
+            return Convert.ToHexString(hash);
+        }
+
+        private static bool FixedTimeEquals(string leftHex, string rightHex)
+        {
+            byte[] left = Convert.FromHexString(leftHex);
+            byte[] right = Convert.FromHexString(rightHex);
+            return CryptographicOperations.FixedTimeEquals(left, right);
+        }
     }
 
-    public async Task<IReadOnlyList<Realm>> GetPublicRealmsAsync(CancellationToken cancellationToken = default)
-    {
-        var cutoff = DateTime.UtcNow.AddSeconds(-Math.Max(30, _options.HeartbeatTimeoutSeconds));
+    public sealed record RealmRegistrationRequest(
+        string RealmId,
+        string Name,
+        string Region,
+        string PublicBaseUrl,
+        string? InternalBaseUrl,
+        string ServiceSecret,
+        int MaxPlayers,
+        string? BuildVersion,
+        int ProtocolVersion);
 
-        var query = _dbContext.Realms
-            .AsNoTracking()
-            .Where(x => x.Enabled && x.IsListed);
+    public sealed record RealmRegistrationResult(
+        string RealmId,
+        bool Created,
+        bool Enabled,
+        string Status);
 
-        if (_options.HideUnhealthyRealms)
-        {
-            query = query.Where(x =>
-                x.LastHeartbeatAt != null &&
-                x.LastHeartbeatAt >= cutoff &&
-                x.Status != "offline");
-        }
+    public sealed record RealmHeartbeatRequest(
+        string RealmId,
+        string Status,
+        int CurrentPlayers,
+        int MaxPlayers,
+        string? BuildVersion,
+        int ProtocolVersion);
 
-        return await query
-            .OrderByDescending(x => x.IsOfficial)
-            .ThenBy(x => x.DisplayName)
-            .ToListAsync(cancellationToken);
-    }
+    public sealed record RealmHeartbeatResult(
+        string RealmId,
+        string Status,
+        int CurrentPlayers,
+        int MaxPlayers,
+        DateTime? LastHeartbeatUtc);
 
-    public async Task<IReadOnlyList<Realm>> GetAllRealmsAsync(CancellationToken cancellationToken = default)
-    {
-        return await _dbContext.Realms
-            .AsNoTracking()
-            .OrderByDescending(x => x.IsOfficial)
-            .ThenBy(x => x.DisplayName)
-            .ToListAsync(cancellationToken);
-    }
-
-    public async Task<Realm> CreateRealmAsync(AdminRealmUpsertRequest request, CancellationToken cancellationToken = default)
-    {
-        var realmId = request.RealmId.Trim();
-
-        if (await _dbContext.Realms.AnyAsync(x => x.RealmId == realmId, cancellationToken))
-        {
-            throw new InvalidOperationException($"Realm '{realmId}' already exists.");
-        }
-
-        var nowUtc = DateTime.UtcNow;
-
-        var entity = new Realm
-        {
-            RealmId = realmId,
-            DisplayName = request.DisplayName.Trim(),
-            Region = request.Region.Trim(),
-            Kind = string.IsNullOrWhiteSpace(request.Kind) ? "realmcore" : request.Kind.Trim(),
-            PublicBaseUrl = request.PublicBaseUrl.Trim(),
-            Status = "offline",
-            CurrentPlayers = 0,
-            MaxPlayers = request.MaxPlayers,
-            HealthyZoneCount = 0,
-            IsListed = request.IsListed,
-            IsOfficial = request.IsOfficial,
-            Enabled = request.Enabled,
-            CreatedAt = nowUtc,
-            UpdatedAt = nowUtc
-        };
-
-        _dbContext.Realms.Add(entity);
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        return entity;
-    }
-
-    public async Task<Realm?> UpdateRealmAsync(string realmId, AdminRealmUpsertRequest request, CancellationToken cancellationToken = default)
-    {
-        var entity = await _dbContext.Realms.FirstOrDefaultAsync(x => x.RealmId == realmId, cancellationToken);
-        if (entity is null)
-        {
-            return null;
-        }
-
-        entity.DisplayName = request.DisplayName.Trim();
-        entity.Region = request.Region.Trim();
-        entity.Kind = string.IsNullOrWhiteSpace(request.Kind) ? entity.Kind : request.Kind.Trim();
-        entity.PublicBaseUrl = request.PublicBaseUrl.Trim();
-        entity.MaxPlayers = request.MaxPlayers;
-        entity.IsListed = request.IsListed;
-        entity.IsOfficial = request.IsOfficial;
-        entity.Enabled = request.Enabled;
-        entity.UpdatedAt = DateTime.UtcNow;
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-        return entity;
-    }
-
-    public async Task UpsertHeartbeatAsync(
-        RealmHeartbeatRequest request,
-        string callerServiceId,
-        IReadOnlyCollection<string> allowedRealmIds,
-        CancellationToken cancellationToken = default)
-    {
-        if (allowedRealmIds.Count == 0)
-        {
-            throw new UnauthorizedAccessException("Heartbeat client must have AllowedRealmIds configured.");
-        }
-
-        if (!allowedRealmIds.Contains(request.RealmId, StringComparer.Ordinal))
-        {
-            throw new UnauthorizedAccessException("Caller is not allowed to update this realm.");
-        }
-
-        var realm = await _dbContext.Realms
-            .FirstOrDefaultAsync(x => x.RealmId == request.RealmId, cancellationToken);
-
-        if (realm is null)
-        {
-            throw new InvalidOperationException(
-                $"Realm '{request.RealmId}' does not exist. Create it first through the admin API.");
-        }
-
-        var normalizedStatus = request.Status.Trim().ToLowerInvariant();
-        if (normalizedStatus is not ("online" or "degraded" or "offline"))
-        {
-            throw new InvalidOperationException("Status must be 'online', 'degraded', or 'offline'.");
-        }
-
-        var nowUtc = DateTime.UtcNow;
-
-        realm.Status = normalizedStatus;
-        realm.CurrentPlayers = request.CurrentPlayers;
-        realm.MaxPlayers = request.MaxPlayers;
-        realm.HealthyZoneCount = request.HealthyZoneCount;
-        realm.LastHeartbeatAt = nowUtc;
-        realm.UpdatedAt = nowUtc;
-
-        await _dbContext.SaveChangesAsync(cancellationToken);
-
-        _logger.LogDebug(
-            "Heartbeat accepted for realm {RealmId} from service {ServiceId}. Players: {CurrentPlayers}/{MaxPlayers}, HealthyZones: {HealthyZoneCount}",
-            request.RealmId,
-            callerServiceId,
-            request.CurrentPlayers,
-            request.MaxPlayers,
-            request.HealthyZoneCount);
-    }
+    public sealed record RealmSummary(
+        string RealmId,
+        string Name,
+        string Region,
+        string PublicBaseUrl,
+        string Status,
+        int CurrentPlayers,
+        int MaxPlayers,
+        DateTime? LastHeartbeatUtc);
 }
