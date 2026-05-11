@@ -13,6 +13,7 @@ using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 using System.Net;
 using System.Threading.RateLimiting;
 
@@ -57,6 +58,14 @@ if (string.IsNullOrWhiteSpace(jwtOptions.PublicKeyPemPath))
     throw new InvalidOperationException("Jwt:PublicKeyPemPath is missing.");
 }
 
+var nonceStoreOptions = builder.Configuration.GetSection(NonceStoreOptions.SectionName).Get<NonceStoreOptions>()
+    ?? new NonceStoreOptions();
+
+if (nonceStoreOptions.UseDistributedCache && string.IsNullOrWhiteSpace(nonceStoreOptions.RedisConnectionString))
+{
+    throw new InvalidOperationException("NonceStore:RedisConnectionString is required when NonceStore:UseDistributedCache=true.");
+}
+
 builder.WebHost.UseUrls(builder.Configuration["Urls"] ?? "http://127.0.0.1:5158");
 
 builder.Services.AddDbContext<AuthDbContext>(options =>
@@ -75,6 +84,12 @@ builder.Services.AddSingleton<MemoryCache>(_ =>
         SizeLimit = 10_000
     }));
 
+if (nonceStoreOptions.UseDistributedCache)
+{
+    builder.Services.AddSingleton<IConnectionMultiplexer>(_ =>
+        ConnectionMultiplexer.Connect(nonceStoreOptions.RedisConnectionString));
+}
+
 builder.Services.AddHttpClient<ISteamTicketValidator, SteamTicketValidator>();
 builder.Services.AddScoped<IJwtTokenService, JwtTokenService>();
 builder.Services.AddScoped<IRealmRegistryService, RealmRegistryService>();
@@ -83,10 +98,12 @@ builder.Services.AddScoped<IAccountAccessValidator, CachedAccountAccessValidator
 builder.Services.AddSingleton<ISchemaCatalogService, SchemaCatalogService>();
 builder.Services.AddSingleton<INonceStore>(sp =>
 {
-    var nonceStoreOptions = sp.GetRequiredService<IOptions<NonceStoreOptions>>().Value;
-    if (nonceStoreOptions.UseDistributedCache)
+    var options = sp.GetRequiredService<IOptions<NonceStoreOptions>>().Value;
+    if (options.UseDistributedCache)
     {
-        return new DistributedNonceStore(sp.GetRequiredService<IDistributedCache>());
+        return new RedisNonceStore(
+            sp.GetRequiredService<IConnectionMultiplexer>(),
+            options.RedisInstanceName);
     }
 
     return new MemoryNonceStore(sp.GetRequiredService<MemoryCache>());
@@ -270,7 +287,7 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
 
 var app = builder.Build();
 
-await ValidateStartupAsync(app);
+await ValidateStartupAsync(app, nonceStoreOptions);
 
 var commandExitCode = await AuthCommandModeRunner.TryRunAsync(app, args);
 if (commandExitCode.HasValue)
@@ -336,7 +353,7 @@ static string GetPreAuthPartitionKey(HttpContext context)
     return $"{remoteIp}:{path}";
 }
 
-static async Task ValidateStartupAsync(WebApplication app)
+static async Task ValidateStartupAsync(WebApplication app, NonceStoreOptions nonceStoreOptions)
 {
     using var scope = app.Services.CreateScope();
 
@@ -345,6 +362,15 @@ static async Task ValidateStartupAsync(WebApplication app)
     if (!canConnect)
     {
         throw new InvalidOperationException("Auth database connection check failed during startup.");
+    }
+
+    if (nonceStoreOptions.UseDistributedCache)
+    {
+        var redis = scope.ServiceProvider.GetRequiredService<IConnectionMultiplexer>();
+        if (!redis.IsConnected)
+        {
+            throw new InvalidOperationException("Redis nonce store is enabled, but the Redis connection is not available during startup.");
+        }
     }
 
     var modules = scope.ServiceProvider.GetServices<IAuthCommandModule>().ToList();
